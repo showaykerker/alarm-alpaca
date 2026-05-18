@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -e
+
+staged_secrets=$(git diff --cached --name-only --diff-filter=AM | grep "^secrets/" || true)
+
+if [ -n "$staged_secrets" ]; then
+  echo "ERROR: Refusing to commit files in secrets/:"
+  echo "$staged_secrets" | sed 's/^/  /'
+  echo ""
+  echo "secrets/ is intentionally never committed. To override (rarely correct):"
+  echo "  git commit --no-verify"
+  exit 1
+fi

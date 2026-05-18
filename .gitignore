@@ -1,0 +1,9 @@
+.direnv
+.DS_Store
+result
+result-*
+result.bpk
+app/.env
+secrets/
+.claude/
+*.pyc
