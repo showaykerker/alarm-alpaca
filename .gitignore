@@ -5,6 +5,7 @@ result-*
 result.bpk
 images/
 app/.env
-secrets/
+secrets/*
+!secrets/*.example
 .claude/
 *.pyc

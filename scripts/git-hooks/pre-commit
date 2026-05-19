@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-staged_secrets=$(git diff --cached --name-only --diff-filter=AM | grep "^secrets/" || true)
+staged_secrets=$(git diff --cached --name-only --diff-filter=AM | grep "^secrets/" | grep -v '\.example$' || true)
 
 if [ -n "$staged_secrets" ]; then
   echo "ERROR: Refusing to commit files in secrets/:"
