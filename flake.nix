@@ -28,6 +28,18 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # SD-image installer module set used by `nixosConfigurations.rpi5-installer`
+    # / `installerImages.rpi5`. Pinned to the same fork branch the deprecated
+    # repo used so the installer drvPath matches what we built before. The
+    # `nixos-raspberrypi.lib.nixosInstaller` helper expects
+    # `nixos-images.nixosModules.sdimage-installer` to be passed in by the
+    # caller (us) — it isn't pulled implicitly through the rpi flake.
+    nixos-images = {
+      url = "github:nvmd/nixos-images/sdimage-installer";
+      inputs.nixos-stable.follows = "nixpkgs";
+      inputs.nixos-unstable.follows = "nixpkgs";
+    };
+
     deploy-rs = {
       url = "github:serokell/deploy-rs";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -39,6 +51,7 @@
       self,
       nixpkgs,
       nixos-raspberrypi,
+      nixos-images,
       deploy-rs,
       ...
     }@inputs:
@@ -79,9 +92,62 @@
 
       nixosConfigurations =
         let
-          # Shared kiosk config — currently used only by the alarm-alpaca
-          # deploy target. Mirrors the layout the deprecated upstream-fork
-          # repo had so app-layer derivations hash the same.
+          # Installer helper. We deliberately use `nixos-raspberrypi.lib.nixosSystem`
+          # (the narrow-overlay path) and re-inject the two installer-specific
+          # modules ourselves, instead of using upstream's `nixosInstaller`
+          # helper. Reason: `nixosInstaller` pulls in the
+          # `full-nixos-raspberrypi-config` module, which sets
+          # `nixpkgs.overlays = lib.mkBefore [ self.overlays.pkgs ]` globally.
+          # Upstream's own comment on that overlay reads:
+          #   "!!! causes _lots_ of rebuilds for graphical stuff via
+          #    ffmpeg, pipewire"
+          # — chromium / gstreamer / pipewire / ffmpeg all get rehashed,
+          # which means cachix misses on every one of them and the build
+          # spends hours qemu-emulating chromium on x86. The deploy target
+          # uses `nixosSystem` (narrow `default-nixos-raspberrypi-config`)
+          # and substitutes cleanly; matching that here keeps the installer
+          # closure cache-compatible with what's already on the device.
+          #
+          # The `sd-image` + `raspberrypi-installer.nix` modules
+          # `nixosInstaller` was implicitly adding are added explicitly
+          # below.
+          mkNixOSRPiInstaller =
+            modules:
+            nixos-raspberrypi.lib.nixosSystem {
+              specialArgs = inputs // {
+                nixos-raspberrypi = nixos-raspberrypi;
+              };
+              modules = [
+                nixos-raspberrypi.nixosModules.sd-image
+                "${nixos-raspberrypi}/modules/installer/raspberrypi-installer.nix"
+                nixos-images.nixosModules.sdimage-installer
+                (
+                  {
+                    config,
+                    lib,
+                    modulesPath,
+                    ...
+                  }:
+                  {
+                    disabledModules = [
+                      # disable the sd-image module that nixos-images uses
+                      (modulesPath + "/installer/sd-card/sd-image-aarch64-installer.nix")
+                    ];
+                    # nixos-images sets this with `mkForce`, thus `mkOverride 40`
+                    image.baseName =
+                      let
+                        cfg = config.boot.loader.raspberry-pi;
+                      in
+                      lib.mkOverride 40 "nixos-installer-rpi${cfg.variant}-${cfg.bootloader}";
+                  }
+                )
+              ]
+              ++ modules;
+            };
+
+          # Shared kiosk config — used by the alarm-alpaca deploy target and
+          # the rpi5-installer image. Mirrors the layout the deprecated
+          # upstream-fork repo had so app-layer derivations hash the same.
           kiosk-config = (
             {
               config,
@@ -157,6 +223,7 @@
               pkgs,
               lib,
               nixos-raspberrypi,
+              self,
               ...
             }:
             {
@@ -177,6 +244,20 @@
                 htop
               ];
 
+              # Surface the flake's git rev to userspace so the kiosk 版本資訊
+              # card can show "which commit is on this device". `dirtyRev`
+              # carries a `-dirty` suffix when the working tree had uncommitted
+              # changes at deploy time — exactly the signal we want on the card.
+              system.configurationRevision = self.rev or self.dirtyRev or null;
+
+              # NixOS upstream does NOT write `system.configurationRevision`
+              # anywhere readable from userspace — only `nixos-version` is
+              # dropped into the toplevel store path. Mirror it to /etc so the
+              # kiosk backend can read it without poking nix internals.
+              environment.etc."configuration-revision" = lib.mkIf (config.system.configurationRevision != null) {
+                text = config.system.configurationRevision;
+              };
+
               system.nixos.tags =
                 let
                   cfg = config.boot.loader.raspberry-pi;
@@ -191,6 +272,36 @@
 
         in
         {
+          # SD-image installer for first-boot provisioning of a fresh card.
+          # Bakes the full kiosk stack (zigbee/alarm-bridge/alarm-doctor/
+          # kiosk-ui/kiosk-display + alarm-alpaca-runtime) so a freshly
+          # flashed card boots straight into the running kiosk with no
+          # separate deploy step. The on-device SD filesystem layout
+          # (`alarm-alpaca-host.nix`) is deliberately omitted — the
+          # installer's `/` and `/boot/firmware` come from
+          # `nixos-images.nixosModules.sdimage-installer` and would
+          # otherwise collide.
+          #
+          # Native aarch64 build (no `nixpkgs.buildPlatform = x86_64-linux`
+          # override): cross-compilation breaks `libcamera-rpi` (the
+          # nixos-raspberrypi overlay's meson subproject for `libpisp`
+          # can't be located under cross), which knocks out the cage →
+          # wireplumber → pipewire chain. Building native aarch64 hits the
+          # nixos-raspberrypi cachix for the heavy hardware bits and only
+          # emulates the small app-layer derivations (kiosk-ui frontend
+          # npm build, alarm-bridge python wrap) under host binfmt
+          # qemu-aarch64.
+          rpi5-installer = mkNixOSRPiInstaller [
+            kiosk-config
+            custom-user-config
+            ./app/alarm-alpaca-runtime.nix
+            ./app/zigbee.nix
+            ./app/alarm-bridge.nix
+            ./app/alarm-doctor.nix
+            ./app/kiosk-ui.nix
+            ./app/kiosk-display.nix
+          ];
+
           # Deploy target for the running RPi5 — used with deploy-rs.
           # Native aarch64 build only (no nixpkgs.buildPlatform override):
           # the nixos-raspberrypi cachix mirror only stores natively-built
@@ -209,8 +320,22 @@
               ./app/kiosk-ui.nix
               ./app/kiosk-display.nix
               ./app/alarm-alpaca-host.nix
+              ./app/alarm-alpaca-runtime.nix
             ];
           };
+        };
+
+      # SD-image artifacts. `nix build .#installerImages.rpi5` produces a
+      # zstd-compressed .img under `<out>/sd-image/`. Used for fresh-card
+      # provisioning only; the deploy target is updated via deploy-rs, not
+      # by reflashing.
+      installerImages =
+        let
+          nixos = self.nixosConfigurations;
+          mkImage = cfg: cfg.config.system.build.sdImage;
+        in
+        {
+          rpi5 = mkImage nixos.rpi5-installer;
         };
 
       deploy.nodes.alarm-alpaca = {

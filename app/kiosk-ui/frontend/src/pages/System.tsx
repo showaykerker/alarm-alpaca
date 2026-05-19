@@ -8,6 +8,7 @@ import {
   HardDrive,
   Loader2,
   MessageSquare,
+  Package,
   Thermometer,
   Wifi,
 } from "lucide-react";
@@ -15,7 +16,7 @@ import { Link } from "react-router-dom";
 
 import { KioskShell } from "@/components/KioskShell";
 import { useKioskEvents } from "@/lib/useKioskEvents";
-import { BackCard, EmptyCell, GridCell } from "@/components/PageGrid";
+import { BackCard, GridCell } from "@/components/PageGrid";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,6 +60,13 @@ type HeartbeatStatus = {
   ok: boolean;
 };
 
+type VersionInfo = {
+  git_rev: string | null;
+  nixos_generation: number | null;
+  last_activated_unix: number | null;
+  installed_unix: number | null;
+};
+
 type SystemInfo = {
   hostname: string;
   kernel: string;
@@ -75,6 +83,7 @@ type SystemInfo = {
   throttled_flags: string[];
   disks: DiskUsage[];
   discord_heartbeat: HeartbeatStatus;
+  version: VersionInfo;
 };
 
 function ifaceIcon(type: string) {
@@ -183,6 +192,14 @@ function formatAge(s: number | null): string {
   const mr = m % 60;
   if (h < 24) return `${h} 小時 ${mr} 分鐘前`;
   return `${Math.floor(h / 24)} 天前`;
+}
+
+// Convert an absolute unix timestamp to a "seconds ago" value suitable for
+// `formatAge`. Clamps negative ages (clock skew) to zero so we never render
+// "—" simply because the backend's mtime is a few seconds in the future.
+function ageSeconds(unix: number | null): number | null {
+  if (unix == null) return null;
+  return Math.max(0, Math.floor(Date.now() / 1000) - unix);
 }
 
 // System info page: superset of the old "IP info" tile. Sections (top→bottom
@@ -315,7 +332,77 @@ export default function SystemPage() {
           </div>
         </GridCell>
 
-        <EmptyCell />
+        <GridCell className="bg-card/80 border-border">
+          <div className="flex flex-col gap-2 min-h-0 h-full">
+            <h2 className="text-base font-semibold text-muted-foreground flex items-center gap-2 shrink-0">
+              <Package className="h-5 w-5" />
+              版本資訊
+            </h2>
+            {loading && !sys ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : sys ? (
+              <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-sm flex-1 min-h-0 items-center">
+                <InfoRow
+                  label="Git"
+                  value={
+                    sys.version.git_rev == null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : sys.version.git_rev.endsWith("-dirty") ? (
+                      <span className="font-mono text-xs">
+                        {sys.version.git_rev.slice(0, -"-dirty".length)}
+                        <span className="text-muted-foreground"> (dirty)</span>
+                      </span>
+                    ) : (
+                      <span className="font-mono text-xs">{sys.version.git_rev}</span>
+                    )
+                  }
+                />
+                <InfoRow
+                  label="Generation"
+                  value={
+                    sys.version.nixos_generation == null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span className="font-mono tabular-nums">
+                        #{sys.version.nixos_generation}
+                      </span>
+                    )
+                  }
+                />
+                <InfoRow
+                  label="本次部署"
+                  value={
+                    sys.version.last_activated_unix == null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span>{formatAge(ageSeconds(sys.version.last_activated_unix))}</span>
+                    )
+                  }
+                />
+                <InfoRow
+                  label="首次安裝"
+                  value={
+                    sys.version.installed_unix == null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span className="flex flex-col">
+                        <span>{formatAge(ageSeconds(sys.version.installed_unix))}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(sys.version.installed_unix * 1000).toLocaleDateString(
+                            "zh-TW",
+                            { year: "numeric", month: "2-digit", day: "2-digit" },
+                          )}
+                        </span>
+                      </span>
+                    )
+                  }
+                />
+              </div>
+            ) : (
+              <p className="text-muted-foreground">無法讀取版本資訊。</p>
+            )}
+          </div>
+        </GridCell>
 
         {/* Row 2: static host card (col1) · live resource card (col2) · back (col3).
             Operator-requested split (2026-05-18) — keeping load/mem/temp on

@@ -88,6 +88,16 @@ class HeartbeatStatus(BaseModel):
     ok: bool
 
 
+class VersionInfo(BaseModel):
+    # `git_rev` is the short (7-char) NixOS configuration revision recorded
+    # at deploy time. A "-dirty" suffix is preserved so the kiosk can flag
+    # an unclean working tree without losing the hash prefix.
+    git_rev: str | None
+    nixos_generation: int | None
+    last_activated_unix: int | None
+    installed_unix: int | None
+
+
 class SystemInfo(BaseModel):
     hostname: str
     kernel: str
@@ -104,6 +114,7 @@ class SystemInfo(BaseModel):
     throttled_flags: list[str]
     disks: list[DiskUsage]
     discord_heartbeat: HeartbeatStatus
+    version: VersionInfo
 
 
 def _read_uptime() -> int:
@@ -244,6 +255,96 @@ def _read_heartbeat() -> HeartbeatStatus:
     )
 
 
+def _read_version() -> VersionInfo:
+    # All four fields degrade independently to None: off-Pi dev hosts won't
+    # have /run/current-system or /nix/var/nix/profiles, and a freshly
+    # installed Pi might not have `system.configurationRevision` set yet.
+
+    git_rev: str | None = None
+    try:
+        # /etc/configuration-revision is wired up by the alarm-alpaca flake
+        # (kiosk-config module). NixOS upstream does NOT auto-write
+        # /run/current-system/configuration-revision from
+        # `system.configurationRevision` — only `nixos-version` is dropped
+        # into the toplevel store path. So we surface the value via
+        # environment.etc instead.
+        raw = Path("/etc/configuration-revision").read_text().strip()
+        if raw:
+            # Preserve a trailing "-dirty" marker — truncate only the hash
+            # prefix so e.g. "a1b2c3def-dirty" stays informative as
+            # "a1b2c3d-dirty" rather than turning into the misleading
+            # "a1b2c3d".
+            if raw.endswith("-dirty"):
+                prefix = raw[: -len("-dirty")]
+                git_rev = f"{prefix[:7]}-dirty"
+            else:
+                git_rev = raw[:7]
+    except (OSError, ValueError):
+        pass
+
+    nixos_generation: int | None = None
+    try:
+        target = os.readlink("/nix/var/nix/profiles/system")
+        # Format: "system-23-link"
+        name = target.rsplit("/", 1)[-1]
+        if name.startswith("system-") and name.endswith("-link"):
+            nixos_generation = int(name[len("system-") : -len("-link")])
+    except (OSError, ValueError):
+        pass
+
+    last_activated_unix: int | None = None
+    try:
+        # Use /nix/var/nix/profiles/system (ext4-persistent), not
+        # /run/current-system (tmpfs). The /run symlink is recreated by
+        # stage-2 init at every boot — on an RTC-less Pi that happens before
+        # NTP sync, so its mtime is epoch+seconds and useless as "last
+        # deploy". The profiles/system symlink is touched at activation and
+        # survives reboots with the real wall-clock time.
+        last_activated_unix = int(os.lstat("/nix/var/nix/profiles/system").st_mtime)
+    except (OSError, ValueError):
+        pass
+
+    # Walk system-N-link in ascending N, return the mtime of the first link
+    # with a post-NTP-sync timestamp. The Pi has no RTC, so the very first
+    # generation activated on a fresh card (often system-1-link) lands with
+    # mtime ~= 0 (epoch + a few seconds before NetworkManager + systemd-timesyncd
+    # catch up). Skipping pre-2020 mtimes hops past that noise to the first
+    # generation that has a meaningful wall-clock — the closest proxy we
+    # have to "this SD card came to life" without baking a marker file.
+    _CLOCK_SANE_EPOCH = 1577836800  # 2020-01-01 UTC
+    installed_unix: int | None = None
+    try:
+        gens: list[tuple[int, int]] = []
+        with os.scandir("/nix/var/nix/profiles") as it:
+            for entry in it:
+                name = entry.name
+                if not (name.startswith("system-") and name.endswith("-link")):
+                    continue
+                try:
+                    num = int(name[len("system-") : -len("-link")])
+                except ValueError:
+                    continue
+                try:
+                    mtime = int(entry.stat(follow_symlinks=False).st_mtime)
+                except OSError:
+                    continue
+                gens.append((num, mtime))
+        gens.sort(key=lambda g: g[0])
+        for _, mtime in gens:
+            if mtime >= _CLOCK_SANE_EPOCH:
+                installed_unix = mtime
+                break
+    except OSError:
+        pass
+
+    return VersionInfo(
+        git_rev=git_rev,
+        nixos_generation=nixos_generation,
+        last_activated_unix=last_activated_unix,
+        installed_unix=installed_unix,
+    )
+
+
 def _read_nixos_version() -> str | None:
     # NixOS ships /etc/os-release with VERSION + BUILD_ID lines; we surface
     # the short VERSION (e.g. "25.05.20250823.abcdef0") so the kiosk shows
@@ -283,6 +384,7 @@ def get_system_info() -> SystemInfo:
         throttled_flags=throttled_flags,
         disks=_read_disks(),
         discord_heartbeat=_read_heartbeat(),
+        version=_read_version(),
     )
 
 

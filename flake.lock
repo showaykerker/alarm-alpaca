@@ -72,6 +72,30 @@
     "nixos-images": {
       "inputs": {
         "nixos-stable": [
+          "nixpkgs"
+        ],
+        "nixos-unstable": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1747747741,
+        "narHash": "sha256-LUOH27unNWbGTvZFitHonraNx0JF/55h30r9WxqrznM=",
+        "owner": "nvmd",
+        "repo": "nixos-images",
+        "rev": "cbbd6db325775096680b65e2a32fb6187c09bbb4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nvmd",
+        "ref": "sdimage-installer",
+        "repo": "nixos-images",
+        "type": "github"
+      }
+    },
+    "nixos-images_2": {
+      "inputs": {
+        "nixos-stable": [
           "nixos-raspberrypi",
           "nixpkgs"
         ],
@@ -99,7 +123,7 @@
       "inputs": {
         "argononed": "argononed",
         "flake-compat": "flake-compat_2",
-        "nixos-images": "nixos-images",
+        "nixos-images": "nixos-images_2",
         "nixpkgs": [
           "nixpkgs"
         ]
@@ -138,6 +162,7 @@
     "root": {
       "inputs": {
         "deploy-rs": "deploy-rs",
+        "nixos-images": "nixos-images",
         "nixos-raspberrypi": "nixos-raspberrypi",
         "nixpkgs": "nixpkgs"
       }
