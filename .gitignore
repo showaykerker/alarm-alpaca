@@ -3,6 +3,7 @@
 result
 result-*
 result.bpk
+images/
 app/.env
 secrets/
 .claude/
