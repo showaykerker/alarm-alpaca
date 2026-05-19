@@ -56,6 +56,17 @@ let
         do
           xcursorgen cur.cfg "$themeDir/cursors/$name"
         done
+
+        # Alias common fallback theme names to point at the invisible theme.
+        # wlroots/libwayland-cursor often ignore XCURSOR_THEME and load
+        # "default" / "Adwaita" / "DMZ-White" directly when a client asks
+        # for a cursor surface; routing every common name through us makes
+        # the lookup land on transparent pixels no matter which name wins.
+        for alias in default Adwaita Adwaita-cursors DMZ-White DMZ-Black \
+                     core capitaine-cursors breeze_cursors Bibata-Modern-Classic
+        do
+          ln -s invisible "$out/share/icons/$alias"
+        done
       '';
 
   # Combined flag set: `--app` opens chromium in standalone app mode (no
@@ -299,8 +310,57 @@ in
 
   # Pull chromium + wlr-randr into the system closure for ad-hoc ssh debugging
   # (the cage-rotate-dsi unit references wlr-randr by store path anyway).
+  # invisibleCursorTheme lands under /run/current-system/sw/share/icons —
+  # which is the only directory on chromium's XCURSOR_PATH that we control,
+  # since the NixOS session profile overwrites the path we set via the
+  # systemd Environment= block. The theme aliases "default" / "Adwaita" /
+  # etc. so that whatever name the compositor or chromium falls back to,
+  # the cursor renders as a 1×1 transparent pixel.
   environment.systemPackages = with pkgs; [
     chromium
     wlr-randr
+    invisibleCursorTheme
   ];
+
+  # Belt-and-suspenders cursor hiding: warp the compositor cursor into the
+  # bottom-right corner on a 3-second loop. The transparent XCURSOR theme
+  # alone does not always win — wlroots/cage may load a fallback theme out
+  # of an unrelated XDG path and chromium 147+ sometimes ignores CSS
+  # `cursor: none`. Parking the pointer past the visible viewport keeps
+  # the cursor effectively invisible regardless of what theme actually
+  # rendered. We use ydotool because it synthesises events through the
+  # kernel `uinput` device — no Wayland protocol support required from
+  # cage, and the warp survives chromium's per-surface cursor logic.
+  programs.ydotool.enable = true;
+
+  systemd.services.cursor-park = {
+    description = "Park the kiosk cursor in the bottom-right corner on a loop";
+    after = [
+      "cage-tty1.service"
+      "ydotoold.service"
+    ];
+    bindsTo = [ "cage-tty1.service" ];
+    wantedBy = [ "cage-tty1.service" ];
+    serviceConfig = {
+      Type = "simple";
+      Restart = "always";
+      RestartSec = "5s";
+      # ydotoold listens on /run/ydotoold/socket (per the NixOS module);
+      # the client looks in /tmp/.ydotool_socket by default, so point it
+      # at the real path. Running as root means the 0660-group=ydotool
+      # socket permission still passes via CAP_DAC_OVERRIDE.
+      Environment = [ "YDOTOOL_SOCKET=/run/ydotoold/socket" ];
+      ExecStart = pkgs.writeShellScript "cursor-park-loop" ''
+        # Sleep first so cage has time to expose the seat / virtual pointer
+        # the first uinput device attaches to. Subsequent iterations re-park
+        # every 3s — cursor stays where the user last tapped for up to 3s
+        # then snaps to the corner.
+        sleep 5
+        while true; do
+          ${pkgs.ydotool}/bin/ydotool mousemove --absolute -- 9999 9999 || true
+          sleep 3
+        done
+      '';
+    };
+  };
 }

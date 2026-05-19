@@ -43,11 +43,6 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* The Pi 5 kiosk has no mouse attached; the X11 / Wayland cursor still
-     * appears whenever a passing event nudges the pointer position
-     * (touchscreen ghost taps, USB plug-in, etc.). Hiding it everywhere on
-     * the page keeps the kiosk surface pure-touch. */
-    cursor: none;
     /* pan-y only — block horizontal swipes so the operator can't drag the
      * UI sideways. Chromium also has --overscroll-history-navigation=0 set
      * at the cage flag level; this is the page-level belt-and-suspenders. */
@@ -76,10 +71,16 @@
     -webkit-user-select: text;
     user-select: text;
   }
-  /* Every interactive element overrides the body's `cursor: none` with
-   * pointer/text/etc. — force them all back to hidden so the cursor is
-   * truly invisible on the kiosk regardless of what's under it. */
-  *, *::before, *::after {
+  /* Hide the cursor only on the on-device kiosk (loopback). main.tsx adds
+   * `kiosk-hide-cursor` to <html> when window.location.hostname is
+   * localhost/127.0.0.1, so LAN browsers keep their pointer for dev. The
+   * Pi 5 kiosk has no mouse attached; pointer events still arrive from
+   * touchscreen ghost taps and the occasional USB plug-in, so the cursor
+   * gets nudged into view if we don't force it hidden. */
+  html.kiosk-hide-cursor body {
+    cursor: none;
+  }
+  html.kiosk-hide-cursor *, html.kiosk-hide-cursor *::before, html.kiosk-hide-cursor *::after {
     cursor: none !important;
   }
 }
