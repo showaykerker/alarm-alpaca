@@ -17,6 +17,7 @@ let
       gnugrep
       gawk
       jq
+      iputils # ping
       libraspberrypi # vcgencmd
     ];
     # The doctor expects many commands to fail (that's the diagnostic point);
@@ -74,9 +75,15 @@ let
       for svc in alarm-bridge.service kiosk-ui.service podman-mosquitto.service podman-zigbee2mqtt.service; do
         state=$(systemctl is-active "$svc" 2>/dev/null || true)
         if [ "$state" = "active" ]; then
-          check_ok "$svc"
+          since=$(systemctl show -p ActiveEnterTimestamp --value "$svc" 2>/dev/null || true)
+          check_ok "$svc''${since:+ (since $since)}"
         else
           check_fail "$svc" "state=$state"
+          # Last 3 journal lines for DC quick-triage.
+          printf "        %s" "$c_d"
+          journalctl -u "$svc" -n 3 --no-pager -o short-iso 2>/dev/null \
+            | sed 's/^/        /'
+          printf "%s\n" "$c_0"
         fi
       done
 
@@ -138,12 +145,88 @@ let
 
       # --- network ---
       section "Network"
-      nm_state=$(nmcli -t -f STATE general 2>/dev/null || echo "")
-      if [ "$nm_state" = "connected" ]; then
-        ssid=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-        check_ok "NetworkManager connected (SSID=''${ssid:-?})"
+      net_diag=""
+
+      # -- L2/L3: interfaces, IPs, gateway --
+      primary_dev=$(nmcli -t -f DEVICE,STATE device status 2>/dev/null \
+        | awk -F: '$2=="connected"{print $1; exit}')
+      if [ -n "$primary_dev" ]; then
+        dev_ip=$(nmcli -t -f IP4.ADDRESS device show "$primary_dev" 2>/dev/null \
+          | head -n1 | cut -d: -f2-)
+        dev_gw=$(nmcli -t -f IP4.GATEWAY device show "$primary_dev" 2>/dev/null \
+          | head -n1 | cut -d: -f2-)
+        check_ok "$primary_dev ip=''${dev_ip:-none} gw=''${dev_gw:-none}"
       else
-        check_fail "NetworkManager" "state=$nm_state"
+        check_fail "no connected interface" "nmcli shows no device in connected state"
+        net_diag="no interface connected — check cable or WiFi config"
+      fi
+
+      # WiFi signal strength — weak signal is a common silent failure mode
+      # in hospital/factory deployments where the AP is far away.
+      ssid=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
+        | awk -F: '$2=="802-11-wireless"{print $1; exit}')
+      if [ -n "$ssid" ]; then
+        signal=$(nmcli -t -f IN-USE,SIGNAL device wifi list 2>/dev/null \
+          | awk -F: '$1=="*"{print $2; exit}')
+        if [ -n "$signal" ]; then
+          if [ "$signal" -ge 50 ]; then
+            check_ok "WiFi SSID=$ssid signal=''${signal}%"
+          elif [ "$signal" -ge 30 ]; then
+            check_warn "WiFi SSID=$ssid" "signal=''${signal}% (weak)"
+          else
+            check_warn "WiFi SSID=$ssid" "signal=''${signal}% (very weak — packet loss likely)"
+            net_diag="''${net_diag:+$net_diag; }WiFi signal very weak — move AP closer or use ethernet"
+          fi
+        else
+          check_ok "WiFi SSID=$ssid signal=?"
+        fi
+      fi
+
+      # NM state is informational — "connected (site only)" is a stale NM
+      # heuristic that doesn't reflect actual reachability.
+      nm_state=$(nmcli -t -f STATE general 2>/dev/null || echo "unknown")
+      check_ok "NetworkManager state=$nm_state"
+
+      # -- L3: gateway reachability --
+      if [ -n "''${dev_gw:-}" ] && [ "$dev_gw" != "--" ]; then
+        if ping -c1 -W2 "$dev_gw" >/dev/null 2>&1; then
+          check_ok "gateway $dev_gw reachable"
+        else
+          check_fail "gateway $dev_gw" "ping failed — LAN-side issue"
+          net_diag="''${net_diag:+$net_diag; }gateway unreachable — check AP/router power and LAN cable"
+        fi
+      fi
+
+      # -- L3: internet reachability (IP only, no DNS) --
+      # TCP connect to 8.8.8.8:53 — consistent with kiosk-ui /api/network/info.
+      if tcp_open 8.8.8.8 53; then
+        check_ok "internet reachable (8.8.8.8:53)"
+      else
+        check_fail "internet unreachable" "TCP connect to 8.8.8.8:53 failed"
+        if [ -z "$net_diag" ]; then
+          net_diag="gateway OK but no internet — router WAN/uplink down?"
+        fi
+      fi
+
+      # -- DNS resolution --
+      # getent uses system nsswitch — tests the same path the services use.
+      resolve_dns() {
+        local label="$1" domain="$2"
+        local ip
+        ip=$(getent ahosts "$domain" 2>/dev/null | awk 'NR==1{print $1}')
+        if [ -n "$ip" ]; then
+          check_ok "DNS $domain → $ip"
+        else
+          check_warn "DNS $domain" "resolution failed"
+          net_diag="''${net_diag:+$net_diag; }cannot resolve $domain — check DNS settings"
+        fi
+      }
+      resolve_dns "TAS" "tasapi.cht.com.tw"
+      resolve_dns "Discord" "discord.com"
+
+      # -- network diagnosis summary --
+      if [ -n "$net_diag" ]; then
+        printf "\n  %s→ diagnosis: %s%s\n" "$c_y" "$net_diag" "$c_0"
       fi
 
       # Outbound HTTPS probes. Hospital firewalls may block arbitrary hosts;
@@ -161,7 +244,6 @@ let
           check_warn "$1" "no HTTP response from $2 (firewall/DNS?)"
         fi
       }
-      probe_host "general internet (1.1.1.1)"  https://1.1.1.1
 
       # api.cloudflare.com is the control plane any cloudflared tunnel or
       # Worker integration depends on; reach here confirms DNS + TLS to
@@ -218,6 +300,24 @@ let
         check_ok "mosquitto :1883 TCP open"
       else
         check_fail "mosquitto :1883" "TCP connect failed"
+      fi
+
+      # z2m bridge/state — "online" means z2m is connected to mosquitto and
+      # the coordinator. This is the fastest indicator of z2m health.
+      bridge_state=$(sudo podman exec mosquitto mosquitto_sub -h localhost \
+        -t 'zigbee2mqtt/bridge/state' -C 1 -W 5 2>/dev/null || true)
+      if [ -n "$bridge_state" ]; then
+        # z2m >= 1.28 publishes JSON {"state":"online"}, older versions
+        # publish the bare string "online".
+        parsed=$(echo "$bridge_state" | jq -r '.state // empty' 2>/dev/null || true)
+        state_val="''${parsed:-$bridge_state}"
+        if [ "$state_val" = "online" ]; then
+          check_ok "z2m bridge/state=online"
+        else
+          check_fail "z2m bridge/state" "state=$state_val"
+        fi
+      else
+        check_warn "z2m bridge/state" "no retained message within 5s"
       fi
 
       # bridge/devices is retained by z2m on each (re)connect. On a freshly
