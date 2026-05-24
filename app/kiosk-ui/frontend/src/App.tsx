@@ -9,6 +9,7 @@ import InternetConfig from "@/pages/config/Internet";
 import MachineConfig from "@/pages/config/Machine";
 import PhoneConfig from "@/pages/config/Phone";
 import ZigbeeConfig from "@/pages/config/Zigbee";
+import EngineeringPage from "@/pages/Engineering";
 import LogPage from "@/pages/Log";
 import Main from "@/pages/Main";
 import ServicePage from "@/pages/Service";
@@ -48,6 +49,7 @@ export default function App() {
           <Route path="/settings/zigbee" element={<ZigbeeConfig />} />
           <Route path="/settings/display" element={<DisplayConfig />} />
           <Route path="/settings/machine" element={<MachineConfig />} />
+          <Route path="/eng" element={<EngineeringPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

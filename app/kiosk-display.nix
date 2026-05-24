@@ -224,6 +224,18 @@ in
       XCURSOR_PATH = "${invisibleCursorTheme}/share/icons";
       XCURSOR_SIZE = "1";
     };
+    # Auto-restart on exit. Without this, a stray Alt+F4 from a USB keyboard
+    # plugged into the kiosk leaves a black screen forever — chromium exits
+    # cleanly (rc=0), cage exits, and the NixOS upstream cage module ships
+    # with Restart=no for first-deploy safety. With RestartIfChanged=false
+    # already on the unit, this only fires on actual crashes / Alt+F4, not
+    # on deploy activations. systemd's default StartLimit (5 in 10s) catches
+    # a permanent failure loop (bad wayland socket etc.) and surfaces it as
+    # "failed" rather than churning forever.
+    serviceConfig = {
+      Restart = "always";
+      RestartSec = 2;
+    };
   };
 
   # Re-fire udev on the Goodix touchscreen right before cage starts, so
@@ -271,6 +283,14 @@ in
     # and would not re-pull this unit. cage-tty1, in contrast, transitions
     # to active each time it (re)starts, which re-evaluates its wants.
     wantedBy = [ "cage-tty1.service" ];
+    # partOf: when cage-tty1 is restarted (now happens automatically on
+    # Alt+F4 / chromium crash via Restart=always), systemd propagates the
+    # stop+start to this oneshot too. Without partOf, RemainAfterExit=true
+    # leaves the unit in "active (exited)" and systemd's wantedBy resolution
+    # treats it as already-satisfied, so the rotation doesn't re-apply and
+    # the panel comes back in portrait. partOf forces it to deactivate
+    # alongside cage so the next cage start re-pulls and re-fires it.
+    partOf = [ "cage-tty1.service" ];
 
     serviceConfig = {
       Type = "oneshot";

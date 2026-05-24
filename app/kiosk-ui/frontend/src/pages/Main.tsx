@@ -20,6 +20,7 @@ type KioskStatus = { components: ComponentStatus[] };
 type NetworkInfoMin = {
   interfaces: { ip: string | null }[];
   mdns: { ok: boolean; hostname: string; resolved_ip: string | null; detail: string | null };
+  internet_reachable: boolean;
 };
 type SystemInfoMin = {
   cpu_temp_c: number | null;
@@ -70,15 +71,14 @@ function diskPct(d: { used_bytes: number; total_bytes: number }): number {
 function aggregateSystemTone(net: NetworkInfoMin | null, sys: SystemInfoMin | null): Tone {
   const tones: Tone[] = [];
 
-  // Internet: no interface has an IP → fatal. mDNS-only failure → warn.
+  // Internet: 8.8.8.8:53 unreachable → fatal. mDNS-only failure → warn.
   if (net) {
-    const hasIp = net.interfaces.some((i) => !!i.ip);
-    if (!hasIp) tones.push("fail");
+    if (!net.internet_reachable) tones.push("fail");
     else if (!net.mdns.ok) tones.push("warn");
   }
 
   // Host: CPU >=80 / throttle flags / root >=95% → fatal. Lighter
-  // thresholds → warn. CPU warn threshold (50°C) matches the EdgeGlow
+  // thresholds → warn. CPU warn threshold (65°C) matches the EdgeGlow
   // thermal overlay so the operator never sees the yellow edge with the
   // 系統資訊 card still showing "一切正常".
   if (sys) {
@@ -87,7 +87,7 @@ function aggregateSystemTone(net: NetworkInfoMin | null, sys: SystemInfoMin | nu
     else {
       const root = sys.disks.find((d) => d.mountpoint === "/");
       if (root && diskPct(root) >= 95) tones.push("fail");
-      else if (sys.cpu_temp_c != null && sys.cpu_temp_c > 50) tones.push("warn");
+      else if (sys.cpu_temp_c != null && sys.cpu_temp_c > 65) tones.push("warn");
       else if (root && diskPct(root) >= 85) tones.push("warn");
     }
 
@@ -179,13 +179,15 @@ export default function Main() {
   const systemTone = aggregateSystemTone(net, fusedSys);
   // Prefer a specific cause in the subtitle so the operator knows what to
   // open (thermal vs. disk vs. network) without drilling in. Thermal wins
-  // when ≥50°C because the edge-glow already cued it; the other causes
-  // only surface when no thermal warning is present.
+  // when >65°C because the edge-glow already cued it; the other causes
+  // only surface when no thermal warning is present. 65°C matches
+  // EdgeGlow.tsx THERMAL_WARN_C so the subtitle never shows a temp value
+  // without the button also being tinted yellow.
   const cpuC = fusedSys?.cpu_temp_c ?? null;
   const systemSubtitle = (() => {
     if (cpuC != null && cpuC >= 80) return `🌡 SoC ${cpuC.toFixed(0)}°C`;
     if (systemTone === "fail") return "⚠️ 連線異常";
-    if (cpuC != null && cpuC > 50) return `🌡 SoC ${cpuC.toFixed(0)}°C`;
+    if (cpuC != null && cpuC > 65) return `🌡 SoC ${cpuC.toFixed(0)}°C`;
     if (systemTone === "warn") return "需注意";
     return "✓ 一切正常";
   })();

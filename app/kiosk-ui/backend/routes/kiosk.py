@@ -434,6 +434,29 @@ def _read_load() -> tuple[float, float, float] | None:
         return None
 
 
+# RPi5 Active Cooler exposes a `pwmfan` hwmon device with fan1_input (RPM).
+# The hwmon index isn't stable across boots, so we scan /sys/class/hwmon for
+# the device whose `name` matches. The scan is cheap (a handful of dirs) and
+# we redo it each read so a hotplug or kernel reorder is picked up without
+# restarting the backend.
+_HWMON_ROOT = Path("/sys/class/hwmon")
+
+
+def _read_fan_rpm() -> int | None:
+    """RPi5 Active Cooler tach reading, or None if no pwmfan hwmon present."""
+    try:
+        for hwmon in _HWMON_ROOT.iterdir():
+            try:
+                if (hwmon / "name").read_text().strip() != "pwmfan":
+                    continue
+                return int((hwmon / "fan1_input").read_text().strip())
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        return None
+    return None
+
+
 def _read_mem_kb() -> tuple[int, int] | None:
     """(used_kb, total_kb) — used = total - MemAvailable (matches `free` and
     /api/system/info). Returns None on read error."""
@@ -464,6 +487,7 @@ class LiveMetrics(BaseModel):
     load_15: float | None = None
     mem_used_kb: int | None = None
     mem_total_kb: int | None = None
+    fan_rpm: int | None = None
 
 
 def _read_live_metrics() -> LiveMetrics:
@@ -476,6 +500,7 @@ def _read_live_metrics() -> LiveMetrics:
         load_15=load[2] if load else None,
         mem_used_kb=mem[0] if mem else None,
         mem_total_kb=mem[1] if mem else None,
+        fan_rpm=_read_fan_rpm(),
     )
 
 

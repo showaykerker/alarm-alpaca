@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FlaskConical, Loader2, Power, RefreshCw, Send, Stethoscope, Trash2 } from "lucide-react";
+import { FlaskConical, Loader2, Power, RefreshCw, Send, Stethoscope } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import { KioskShell } from "@/components/KioskShell";
@@ -40,7 +41,6 @@ export default function MachineConfig() {
   const [pending, setPending] = useState<PowerAction | null>(null);
   const [doctorOpen, setDoctorOpen] = useState(false);
   const [smokeOpen, setSmokeOpen] = useState(false);
-  const [vacuumOpen, setVacuumOpen] = useState(false);
 
   return (
     <KioskShell title="機器操作" tone="warn">
@@ -59,13 +59,7 @@ export default function MachineConfig() {
           tone="warn"
           onClick={() => setSmokeOpen(true)}
         />
-        <ActionTile
-          label="清除記錄"
-          subtitle="journalctl --vacuum"
-          icon={<Trash2 className="h-12 w-12 text-amber-300" strokeWidth={2.2} />}
-          tone="warn"
-          onClick={() => setVacuumOpen(true)}
-        />
+        <EngEasterEgg />
 
         <ActionTile
           label="重新開機"
@@ -85,7 +79,6 @@ export default function MachineConfig() {
       <PowerConfirmDialog action={pending} onClose={() => setPending(null)} />
       <DoctorDialog open={doctorOpen} onClose={() => setDoctorOpen(false)} />
       <SmokeDialog open={smokeOpen} onClose={() => setSmokeOpen(false)} />
-      <VacuumDialog open={vacuumOpen} onClose={() => setVacuumOpen(false)} />
     </KioskShell>
   );
 }
@@ -554,83 +547,29 @@ function SmokeDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   );
 }
 
-// VacuumDialog: confirm + fire POST /api/system/vacuum-journal. The endpoint
-// runs `sudo journalctl --rotate --vacuum-time=1s`, which is system-wide —
-// there is no per-unit knob in journalctl. We warn the operator about that
-// explicitly so they don't expect "only alarm-bridge" semantics.
-function VacuumDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ rc: number; out: string } | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+const ENG_TAPS = 20;
+const ENG_WINDOW_MS = 8000;
 
-  useEffect(() => {
-    if (open) return;
-    setBusy(false);
-    setResult(null);
-    setErr(null);
-  }, [open]);
+function EngEasterEgg() {
+  const navigate = useNavigate();
+  const tapsRef = useRef<number[]>([]);
 
-  const run = async () => {
-    setBusy(true);
-    setErr(null);
-    setResult(null);
-    try {
-      const r = await fetch("/api/system/vacuum-journal", { method: "POST" });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body?.detail ?? `HTTP ${r.status}`);
-      }
-      const data = await r.json();
-      const combined = `${data.stdout || ""}${data.stderr ? `\n--- stderr ---\n${data.stderr}` : ""}`;
-      setResult({ rc: data.returncode, out: combined });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
+  const handleTap = () => {
+    const now = Date.now();
+    tapsRef.current = tapsRef.current.filter((t) => now - t < ENG_WINDOW_MS);
+    tapsRef.current.push(now);
+    if (tapsRef.current.length >= ENG_TAPS) {
+      tapsRef.current = [];
+      navigate("/eng");
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-2xl border-amber-600/60">
-        <DialogHeader>
-          <DialogTitle className="text-amber-300">清除系統記錄</DialogTitle>
-          <DialogDescription className="text-base">
-            執行 <code>journalctl --rotate --vacuum-time=1s</code>，刪除所有歷史記錄。
-            <br />
-            ⚠️ 此操作為系統層級（不限單一服務），完成後所有單元的舊紀錄都會消失。
-          </DialogDescription>
-        </DialogHeader>
-        {err && (
-          <Alert variant="destructive">
-            <AlertDescription>{err}</AlertDescription>
-          </Alert>
-        )}
-        {result && <ColoredLog text={result.out || "（無輸出）"} />}
-        <DialogFooter>
-          {!result && !busy && (
-            <>
-              <Button variant="outline" size="lg" onClick={onClose}>
-                取消
-              </Button>
-              <Button size="lg" variant="destructive" onClick={() => void run()}>
-                確認清除
-              </Button>
-            </>
-          )}
-          {busy && (
-            <Button size="lg" disabled>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              執行中…
-            </Button>
-          )}
-          {result && (
-            <Button size="lg" onClick={onClose}>
-              {result.rc === 0 ? "完成" : `關閉 (rc=${result.rc})`}
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <button
+      type="button"
+      onClick={handleTap}
+      className="rounded-2xl bg-transparent"
+      aria-hidden="true"
+    />
   );
 }

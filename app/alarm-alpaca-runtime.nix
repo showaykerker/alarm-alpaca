@@ -27,11 +27,14 @@
   virtualisation.podman.enable = true;
   virtualisation.podman.dockerCompat = true;
 
-  # Open the kiosk UI to the LAN so phones.txt etc. can be edited from a
-  # phone/laptop on the same network. HTTP Basic auth (admin /
-  # secrets/kiosk-password) gates non-loopback clients; the on-device
-  # Chromium kiosk hits 127.0.0.1 and is exempt.
-  services.alarm-kiosk.exposeToLan = true;
+  # Lock the kiosk UI to loopback for the prod cutover. Per
+  # project-prod-hardening-checklist memory: HTTP Basic auth is fine for a
+  # trusted LAN but the cutover places the device on an untrusted network,
+  # so non-loopback access must be off. Flip back to true only when on a
+  # trusted segment AND every edit-from-phone workflow has an alternative
+  # (SSH or on-device touchscreen). The on-device Chromium kiosk hits
+  # 127.0.0.1 and is unaffected.
+  services.alarm-kiosk.exposeToLan = false;
 
   system.stateVersion = "25.11";
 }

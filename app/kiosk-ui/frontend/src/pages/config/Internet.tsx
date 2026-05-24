@@ -131,20 +131,15 @@ export default function InternetConfig() {
     await fetchWifi();
   };
 
-  const openConnect = (net: WifiNetwork) => {
-    setTarget(net);
-    setPsk("");
-    setConnectError(null);
-    setConnectSuccess(false);
-  };
-
-  const doConnect = async () => {
-    if (!target) return;
+  // Shared connect path so saved-network tap can fire without password and
+  // the password-dialog Submit button can fire with one — both routes hit
+  // the same backend endpoint and share the success/error UX state.
+  const performConnect = async (ssid: string, password?: string) => {
     setConnecting(true);
     setConnectError(null);
     try {
-      const body: { ssid: string; password?: string } = { ssid: target.ssid };
-      if (!isOpen(target.security) && psk) body.password = psk;
+      const body: { ssid: string; password?: string } = { ssid };
+      if (password) body.password = password;
       const r = await fetch("/api/wifi/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -166,6 +161,25 @@ export default function InternetConfig() {
     } finally {
       setConnecting(false);
     }
+  };
+
+  const openConnect = (net: WifiNetwork) => {
+    setTarget(net);
+    setPsk("");
+    setConnectError(null);
+    setConnectSuccess(false);
+    // Saved network: NM already has the PSK on file — try it silently first.
+    // The dialog still opens to show the connecting spinner; on failure it
+    // surfaces the password input so the operator can re-enter (the common
+    // failure mode is "router rotated the PSK", which needs manual entry).
+    if (net.saved && !isOpen(net.security)) {
+      void performConnect(net.ssid);
+    }
+  };
+
+  const doConnect = () => {
+    if (!target) return;
+    void performConnect(target.ssid, !isOpen(target.security) && psk ? psk : undefined);
   };
 
   const doForget = async () => {
@@ -209,6 +223,11 @@ export default function InternetConfig() {
   };
 
   const dialogIsSecured = target && !isOpen(target.security);
+  // True while we're silently trying NM's saved PSK — keeps the password
+  // input hidden so the operator isn't confused by a half-rendered form
+  // while the radio is mid-handshake. Flips back to the input on failure.
+  const autoTryingSaved =
+    target?.saved && connecting && !connectError && !psk && !connectSuccess;
 
   return (
     <KioskShell title="網際網路設定">
@@ -248,7 +267,13 @@ export default function InternetConfig() {
               <WifiOff className="h-12 w-12 text-muted-foreground" />
             )}
             <div className="text-xl font-bold">WiFi</div>
-            {loading && !status ? (
+            {/* Spinner while the WiFi scan is still in flight. The ethernet
+                fetch populates `status` early with `device: null`, so the old
+                `loading && !status` check fell through to "未連線" during the
+                ~3-8 s WiFi scan even though we hadn't asked the radio yet.
+                Gate on `device` instead: it only gets a value after
+                /api/wifi finishes. */}
+            {loading && status?.device == null ? (
               <Loader2 className="h-5 w-5 animate-spin" />
             ) : status?.connected ? (
               <>
@@ -435,6 +460,11 @@ export default function InternetConfig() {
             <div className="py-4 text-center text-emerald-400 font-medium">
               連線成功！
             </div>
+          ) : autoTryingSaved ? (
+            <div className="flex items-center justify-center gap-3 py-6 text-base text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              正在使用已儲存的密碼連線…
+            </div>
           ) : (
             <>
               {dialogIsSecured && (
@@ -457,7 +487,11 @@ export default function InternetConfig() {
               )}
               {connectError && (
                 <Alert variant="destructive">
-                  <AlertDescription>{connectError}</AlertDescription>
+                  <AlertDescription>
+                    {target?.saved
+                      ? `已儲存的密碼無法連線,請重新輸入。(${connectError})`
+                      : connectError}
+                  </AlertDescription>
                 </Alert>
               )}
             </>

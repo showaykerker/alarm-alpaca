@@ -4,6 +4,7 @@ import {
   Cable,
   CheckCircle2,
   Cpu,
+  Fan,
   Globe,
   HardDrive,
   Loader2,
@@ -44,7 +45,7 @@ type MdnsProbe = {
   detail: string | null;
 };
 
-type NetworkInfo = { interfaces: NetIface[]; mdns: MdnsProbe };
+type NetworkInfo = { interfaces: NetIface[]; mdns: MdnsProbe; internet_reachable: boolean };
 
 type DiskUsage = {
   mountpoint: string;
@@ -116,7 +117,10 @@ function formatKb(kb: number): string {
 function tempTone(c: number | null): "ok" | "warn" | "fail" | null {
   if (c == null) return null;
   if (c >= 80) return "fail";
-  if (c >= 70) return "warn";
+  // 65°C matches EdgeGlow.tsx THERMAL_WARN_C + Main.tsx host-card warn so
+  // operator never sees a yellow glow / yellow host button with a green CPU
+  // row on the detail page.
+  if (c >= 65) return "warn";
   return "ok";
 }
 
@@ -132,13 +136,12 @@ function diskTone(d: DiskUsage): "ok" | "warn" | "fail" {
   return "ok";
 }
 
-// "Internet broken" = no interface has an IP. mDNS-failure doesn't escalate
-// past warning because broadcast on a private LAN can lag without losing
-// outbound reachability.
+// Primary signal: TCP connect to 8.8.8.8:53 (IP-layer reachability, no DNS).
+// Secondary: mDNS failure is warn-only (broadcast can lag without losing
+// outbound reachability).
 export function computeInternetTone(net: NetworkInfo | null): "ok" | "warn" | "fail" {
   if (!net) return "ok";
-  const hasIp = net.interfaces.some((i) => !!i.ip);
-  if (!hasIp) return "fail";
+  if (!net.internet_reachable) return "fail";
   if (!net.mdns.ok) return "warn";
   return "ok";
 }
@@ -247,6 +250,7 @@ export default function SystemPage() {
   const liveLoad15 = liveMetrics?.load_15 ?? sys?.load_15 ?? null;
   const liveMemUsed = liveMetrics?.mem_used_kb ?? sys?.mem_used_kb ?? null;
   const liveMemTotal = liveMetrics?.mem_total_kb ?? sys?.mem_total_kb ?? null;
+  const liveFanRpm = liveMetrics?.fan_rpm ?? null;
 
   const hb = sys?.discord_heartbeat;
   const cpuTone = tempTone(liveCpuC);
@@ -284,6 +288,13 @@ export default function SystemPage() {
           <h2 className="text-base font-semibold text-muted-foreground flex items-center gap-2">
             <Globe className="h-5 w-5" />
             網際網路
+            {net && (
+              net.internet_reachable ? (
+                <Badge className="bg-emerald-600 text-white text-xs ml-auto">外網正常</Badge>
+              ) : (
+                <Badge variant="destructive" className="text-xs ml-auto">外網不通</Badge>
+              )
+            )}
           </h2>
           <div className="flex-1 min-h-0 overflow-y-auto space-y-1 mt-1">
             {loading && !net ? (
@@ -347,11 +358,6 @@ export default function SystemPage() {
                   value={
                     sys.version.git_rev == null ? (
                       <span className="text-muted-foreground">—</span>
-                    ) : sys.version.git_rev.endsWith("-dirty") ? (
-                      <span className="font-mono text-xs">
-                        {sys.version.git_rev.slice(0, -"-dirty".length)}
-                        <span className="text-muted-foreground"> (dirty)</span>
-                      </span>
                     ) : (
                       <span className="font-mono text-xs">{sys.version.git_rev}</span>
                     )
@@ -379,24 +385,8 @@ export default function SystemPage() {
                     )
                   }
                 />
-                <InfoRow
-                  label="首次安裝"
-                  value={
-                    sys.version.installed_unix == null ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      <span className="flex flex-col">
-                        <span>{formatAge(ageSeconds(sys.version.installed_unix))}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(sys.version.installed_unix * 1000).toLocaleDateString(
-                            "zh-TW",
-                            { year: "numeric", month: "2-digit", day: "2-digit" },
-                          )}
-                        </span>
-                      </span>
-                    )
-                  }
-                />
+                <span />
+                <span />
               </div>
             ) : (
               <p className="text-muted-foreground">無法讀取版本資訊。</p>
@@ -576,6 +566,37 @@ export default function SystemPage() {
                         )}
                       >
                         {liveCpuC.toFixed(1)} ℃
+                      </span>
+                    )
+                  }
+                />
+                <InfoRow
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <Fan
+                        className={cn(
+                          "h-3.5 w-3.5",
+                          liveFanRpm != null && liveFanRpm > 0 && "animate-spin",
+                        )}
+                        style={
+                          liveFanRpm != null && liveFanRpm > 0
+                            ? { animationDuration: `${Math.max(0.4, 60000 / liveFanRpm / 10)}s` }
+                            : undefined
+                        }
+                      />
+                      風扇轉速
+                    </span>
+                  }
+                  value={
+                    liveFanRpm == null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : liveFanRpm === 0 ? (
+                      <span className="font-mono tabular-nums text-muted-foreground">
+                        停轉
+                      </span>
+                    ) : (
+                      <span className="font-mono tabular-nums">
+                        {liveFanRpm} RPM
                       </span>
                     )
                   }

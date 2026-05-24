@@ -155,14 +155,6 @@ let
           command = "${pkgs.systemd}/bin/systemctl stop alarm-smoke-*";
           options = [ "NOPASSWD" ];
         }
-        # Journal vacuum from the Machine page. `--rotate` seals the active
-        # journal, `--vacuum-time=1s` then drops all rotated files — system-
-        # wide (journalctl has no per-unit vacuum). Locked to this exact
-        # flag pair so the rule can't be abused for arbitrary journalctl ops.
-        {
-          command = "${pkgs.systemd}/bin/journalctl --rotate --vacuum-time=1s";
-          options = [ "NOPASSWD" ];
-        }
         # alarm-doctor is read-only and uses `sudo` internally to read the
         # bridge env file, `podman exec`, `journalctl -k`, and vcgencmd.
         # We grant NOPASSWD for the doctor binary itself; the inner sudo
@@ -179,6 +171,38 @@ let
         # via this rule.
         {
           command = "/run/current-system/sw/bin/alarm-doctor --print-secret DISCORD_SYSTEM_WEBHOOK_URL";
+          options = [ "NOPASSWD" ];
+        }
+        # Engineering page: MQTT retained-message reads via podman exec,
+        # container stats, and generation cleanup. Uses /run/current-system/sw
+        # paths because ${pkgs.*} resolves to x86_64 store hashes at eval
+        # time but the device runs aarch64 binaries with different hashes.
+        {
+          command = "/run/current-system/sw/bin/podman exec mosquitto mosquitto_sub *";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/run/current-system/sw/bin/podman stats --no-stream --format json";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/run/current-system/sw/bin/nix-env --list-generations *";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/run/current-system/sw/bin/nix-env --switch-generation *";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/run/current-system/sw/bin/nix-env --delete-generations *";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/nix/var/nix/profiles/system/bin/switch-to-configuration switch";
+          options = [ "NOPASSWD" ];
+        }
+        {
+          command = "/run/current-system/sw/bin/nix-collect-garbage";
           options = [ "NOPASSWD" ];
         }
       ];
@@ -225,6 +249,10 @@ in
     # service can write without sudo.
     systemd.tmpfiles.rules = [
       "d /var/lib/kiosk-ui 0750 kiosk-ui kiosk-ui -"
+      # alarm.py writes one file per /api/alarm/doctor invocation here and
+      # prunes to the newest 1000. Pre-creating the dir avoids a race on
+      # the first call after a fresh deploy.
+      "d /var/lib/kiosk-ui/doctor-logs 0750 kiosk-ui kiosk-ui -"
     ];
 
     # Grant the kiosk-ui user (via `video` supplementary group) write access
@@ -370,6 +398,7 @@ in
           "AF_INET"
           "AF_INET6"
           "AF_UNIX"
+          "AF_NETLINK" # ip route in engineering page
         ];
       };
     };

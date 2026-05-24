@@ -39,6 +39,7 @@ class MdnsProbe(BaseModel):
 class NetworkInfo(BaseModel):
     interfaces: list[Interface]
     mdns: MdnsProbe
+    internet_reachable: bool
 
 
 async def _run(*args: str, timeout: float = 4.0) -> tuple[int, str, str]:
@@ -196,7 +197,24 @@ async def _mdns_probe() -> MdnsProbe:
     return probe
 
 
+async def _internet_reachable() -> bool:
+    """TCP connect to 8.8.8.8:53 — tests IP-layer internet without DNS."""
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection("8.8.8.8", 53), timeout=3.0
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except (OSError, asyncio.TimeoutError):
+        return False
+
+
 @router.get("/info", response_model=NetworkInfo, dependencies=[Depends(auth_dep)])
 async def get_info() -> NetworkInfo:
-    interfaces, mdns = await asyncio.gather(_interfaces(), _mdns_probe())
-    return NetworkInfo(interfaces=interfaces, mdns=mdns)
+    interfaces, mdns, reachable = await asyncio.gather(
+        _interfaces(), _mdns_probe(), _internet_reachable()
+    )
+    return NetworkInfo(
+        interfaces=interfaces, mdns=mdns, internet_reachable=reachable
+    )
