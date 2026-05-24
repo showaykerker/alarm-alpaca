@@ -9,9 +9,8 @@ forwards Zigbee button presses to a TAS phone-callout REST API and a
 Discord webhook. The whole system is one NixOS flake deployed via
 deploy-rs.
 
-Operator-facing manual for the touchscreen UI:
-[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (English) ·
-[`docs/USER_GUIDE.zh-TW.md`](docs/USER_GUIDE.zh-TW.md) (繁體中文).
+Operator-facing manual for the touchscreen UI (繁體中文):
+[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
 
 ## Hardware
 
