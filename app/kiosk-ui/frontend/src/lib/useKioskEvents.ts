@@ -56,6 +56,7 @@ export type LiveMetrics = {
   load_15: number | null;
   mem_used_kb: number | null;
   mem_total_kb: number | null;
+  fan_rpm: number | null;
 };
 
 export type KioskEvents = {
@@ -147,6 +148,7 @@ function useKioskEventsConnection(): KioskEvents {
               load_15: prev?.load_15 ?? null,
               mem_used_kb: prev?.mem_used_kb ?? null,
               mem_total_kb: prev?.mem_total_kb ?? null,
+              fan_rpm: prev?.fan_rpm ?? null,
             }));
           }
         } catch {
@@ -184,6 +186,7 @@ function useKioskEventsConnection(): KioskEvents {
             load_15: data.load_15 ?? null,
             mem_used_kb: data.mem_used_kb ?? null,
             mem_total_kb: data.mem_total_kb ?? null,
+            fan_rpm: data.fan_rpm ?? null,
           });
         } catch {
           /* drop */

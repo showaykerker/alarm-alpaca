@@ -16,6 +16,7 @@ import re
 import shutil
 import socket
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator, Literal
 
 import httpx
@@ -27,6 +28,49 @@ from auth import auth_dep
 
 router = APIRouter(prefix="/api/alarm", tags=["alarm"])
 log = logging.getLogger("kiosk-ui.alarm")
+
+# Persistent per-run record of every alarm-doctor invocation. Operators run
+# the doctor on the kiosk Machine page and the dialog only shows the latest
+# result; this archive lets us answer "what did the doctor say last week" by
+# SSHing in. The directory lives under the kiosk-ui state dir (which is
+# already on ReadWritePaths in the service unit); the tmpfiles rule in
+# kiosk-ui.nix pre-creates it so the first request after a fresh deploy
+# doesn't race the mkdir.
+_DOCTOR_LOG_DIR = Path("/var/lib/kiosk-ui/doctor-logs")
+# 1000 ~= 7 months at five-runs-per-day, plenty of history without unbounded
+# disk growth on an SD card. Each log is a few KB.
+_DOCTOR_LOG_KEEP = 1000
+
+
+def _persist_doctor_log(result: "DoctorResult") -> None:
+    """Append one alarm-doctor run to the archive, pruning oldest beyond
+    _DOCTOR_LOG_KEEP. Best-effort: never raises into the request path."""
+    try:
+        _DOCTOR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        # Microsecond suffix so a burst of doctor invocations from one operator
+        # tapping the button repeatedly can't collide on filename.
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
+        path = _DOCTOR_LOG_DIR / f"{ts}.log"
+        body = (
+            f"# alarm-doctor run\n"
+            f"# rc={result.returncode}\n"
+            f"# timestamp_utc={datetime.now(timezone.utc).isoformat()}\n"
+            f"\n=== stdout ===\n{result.stdout}"
+        )
+        if result.stderr:
+            body += f"\n=== stderr ===\n{result.stderr}"
+        path.write_text(body)
+        # Lexicographic sort of the timestamped filenames == chronological
+        # order, so trimming the head drops the oldest entries first.
+        files = sorted(_DOCTOR_LOG_DIR.glob("*.log"))
+        excess = len(files) - _DOCTOR_LOG_KEEP
+        for f in files[:excess]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        log.exception("failed to persist doctor log")
 
 SmokeTarget = Literal["discord", "tas", "zigbee"]
 
@@ -66,11 +110,13 @@ async def run_doctor() -> DoctorResult:
         proc.kill()
         await proc.communicate()
         raise HTTPException(status_code=504, detail="alarm-doctor timed out")
-    return DoctorResult(
+    result = DoctorResult(
         returncode=proc.returncode or 0,
         stdout=stdout.decode(errors="replace"),
         stderr=stderr.decode(errors="replace"),
     )
+    _persist_doctor_log(result)
+    return result
 
 
 async def _stop_smoke_unit(unit: str) -> None:
