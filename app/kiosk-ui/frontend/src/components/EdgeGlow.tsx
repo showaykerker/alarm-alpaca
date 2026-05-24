@@ -3,15 +3,16 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { useKioskEvents, type KioskFlashEvent } from "@/lib/useKioskEvents";
 
-// Edge glow overlay. Two independent flash sources, last-wins:
+// Edge glow overlay. Two flash sources, last-wins:
 //   * alarm    — red, 15s, on a fresh `last_alarm_us` (TAS callout placed).
 //   * selftest — green, 5s, on a fresh `last_selftest_us` (test-press
 //                button registered without dialling out).
-// We used to paint an ambient green/orange glow tied to the watchdog state,
-// but the dark UI already carries that signal via the main-page status
-// tiles, and the constant border colour was visually noisy and
-// indistinguishable from the alarm at a glance. The status tiles now own
-// "system health"; this component is exclusively the event-flash overlay.
+// Thermal state is intentionally NOT on the edge glow — adding amber on top
+// of red/green made the three colours read as a severity ramp at a glance,
+// which mis-signals what amber actually meant (sustained warning, not
+// "between red and green"). Thermal warnings now live solely on the main-
+// page 系統資訊 status tile (it turns amber for cpu_temp_c > 65°C via the
+// existing tone calculation in Main.tsx).
 //
 // The two kinds animate at different cadences (alarm is fast and urgent,
 // selftest is a slow calm breath) so peripheral vision can tell them apart
@@ -29,8 +30,6 @@ const ALARM_WINDOW_MS = 15_000;
 const SELFTEST_WINDOW_MS = 5_000;
 const ALARM_COLOR = "rgba(239, 68, 68, 0.85)"; // red-500
 const SELFTEST_COLOR = "rgba(34, 197, 94, 0.85)"; // green-500
-const THERMAL_COLOR = "rgba(234, 179, 8, 0.55)"; // yellow-500, lower alpha — ambient, not urgent
-const THERMAL_WARN_C = 50;
 
 type Flash = { kind: FlashKind; startedAt: number };
 
@@ -40,7 +39,7 @@ function flashFromEvent(ev: KioskFlashEvent | null): Flash | null {
 }
 
 export function EdgeGlow() {
-  const { lastFlash, cpuTempC } = useKioskEvents();
+  const { lastFlash } = useKioskEvents();
   // Last-wins: a fresh selftest while an alarm is already glowing will
   // briefly overwrite the red with green. That's intentional — the operator
   // pressed a test button, they should see test feedback.
@@ -64,27 +63,7 @@ export function EdgeGlow() {
     return () => window.clearTimeout(id);
   }, [flash]);
 
-  // Sustained ambient warning when the SoC is running hot. The alarm/
-  // selftest flash takes precedence when both apply — operators can fix the
-  // alarm first; the thermal cue comes back the instant the flash window
-  // ends. THERMAL_WARN_C matches the alarm-doctor warn threshold.
-  const isHot = cpuTempC != null && cpuTempC > THERMAL_WARN_C;
-
-  if (flash === null && !isHot) return null;
-
-  if (flash === null) {
-    // Ambient thermal-warning glow only.
-    return (
-      <div
-        aria-hidden="true"
-        className="edge-glow"
-        style={{
-          boxShadow: `inset 0 0 60px 12px ${THERMAL_COLOR}, inset 0 0 120px 36px ${THERMAL_COLOR}`,
-        }}
-        title={`SoC ${cpuTempC?.toFixed(0)}°C`}
-      />
-    );
-  }
+  if (flash === null) return null;
 
   const isAlarm = flash.kind === "alarm";
   const color = isAlarm ? ALARM_COLOR : SELFTEST_COLOR;

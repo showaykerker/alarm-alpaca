@@ -9,6 +9,10 @@ forwards Zigbee button presses to a TAS phone-callout REST API and a
 Discord webhook. The whole system is one NixOS flake deployed via
 deploy-rs.
 
+Operator-facing manual for the touchscreen UI:
+[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) (English) ·
+[`docs/USER_GUIDE.zh-TW.md`](docs/USER_GUIDE.zh-TW.md) (繁體中文).
+
 ## Hardware
 
 - Raspberry Pi 5
@@ -47,7 +51,8 @@ scripts/
   git-hooks/pre-commit      Blocks any commit that stages files under secrets/
 app/
   flake.nix                 Per-app devshell (python313 + node_20)
-  alarm-alpaca-host.nix     SD layout, nixos user, stateVersion, LAN-expose flag
+  alarm-alpaca-host.nix     SD filesystem layout (NIXOS_SD / FIRMWARE labels)
+  alarm-alpaca-runtime.nix  nixos user, podman, kiosk-ui LAN exposure, stateVersion
   hardware-display.nix      DSI ILI9881 rotation overlay
   networking.nix            NetworkManager + avahi (no declarative WiFi)
   zigbee.nix                podman: mosquitto + zigbee2mqtt (TZ=Asia/Taipei)
@@ -84,10 +89,13 @@ nix eval --raw .#nixosConfigurations.alarm-alpaca.config.system.build.toplevel.d
                                        # cheap eval-only sanity check (no build)
 nix build .#nixosConfigurations.alarm-alpaca.config.system.build.toplevel
                                        # build the deploy target locally (aarch64)
-deploy .#alarm-alpaca                  # deploy to the running RPi (from devShell)
-# or, without entering devShell:
 nix run github:serokell/deploy-rs -- .#alarm-alpaca
+                                       # deploy to the running RPi
 ```
+
+`deploy-rs` is not in the root devShell, so run it via `nix run` —
+the devShell's `shellHook` exists only to wire `core.hooksPath` for
+the pre-commit secrets guard.
 
 Per-app devshell (Python + Node for working on `app/` code directly):
 
@@ -223,9 +231,35 @@ git config core.hooksPath scripts/git-hooks
   change `buildPlatform` in every derivation hash and blow past every
   cache entry.
 
+## Network exposure / hardening posture
+
+The deployed image binds every management plane to loopback. This is
+the posture that survives an untrusted-LAN cutover; if you ever flip
+any of the flags below, re-audit the threat model first
+(`runbook-sd-compromise.md` describes the response side; see
+`security-review-2026-05-21.md` in the obsidian notes for the prevention
+side).
+
+- `app/alarm-alpaca-runtime.nix` sets `services.alarm-kiosk.exposeToLan =
+  false` (commit `70c9949`) → `kiosk-ui` (FastAPI uvicorn) binds
+  `127.0.0.1:8090` only. The on-device chromium reaches it over
+  loopback. No LAN port is opened and the firewall does not allow
+  `8090/tcp`. The HTTP Basic password is provisioned for the
+  `exposeToLan = true` case; it exists on disk, but no remote process
+  can hit the auth challenge.
+- `app/zigbee.nix` binds the mosquitto and zigbee2mqtt podman
+  containers to `127.0.0.1` only. The alarm-bridge daemon reaches
+  MQTT over loopback. No LAN MQTT broker is exposed.
+- `app/networking.nix` keeps the firewall closed by default. The
+  only externally reachable TCP port is `22/tcp` (SSH), key-only
+  because the `nixos` user has no password set.
+- `app/kiosk-ui/backend/auth.py` exempts loopback from HTTP Basic so
+  the touch UI works without prompting. Any future write endpoint
+  added to the backend must require auth that the loopback bypass
+  does **not** cover — otherwise any process on the device (including
+  an RCE in mosquitto/z2m/alarm-bridge) reaches it for free.
+
 ## Known TODOs
 
-- **Prod hardening before untrusted-LAN cutover** — flip
-  `exposeToLan=false` and lock down MQTT.
 - **Finish splitting `flake.nix`** — extract the inline `kiosk-config`
   and `custom-user-config` blocks into per-concern `app/*.nix` files.
