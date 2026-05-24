@@ -270,15 +270,11 @@ def _read_version() -> VersionInfo:
         # environment.etc instead.
         raw = Path("/etc/configuration-revision").read_text().strip()
         if raw:
-            # Preserve a trailing "-dirty" marker — truncate only the hash
-            # prefix so e.g. "a1b2c3def-dirty" stays informative as
-            # "a1b2c3d-dirty" rather than turning into the misleading
-            # "a1b2c3d".
+            # Strip "-dirty" — intent-to-add secrets files always make
+            # the tree dirty, so the suffix is meaningless noise.
             if raw.endswith("-dirty"):
-                prefix = raw[: -len("-dirty")]
-                git_rev = f"{prefix[:7]}-dirty"
-            else:
-                git_rev = raw[:7]
+                raw = raw[: -len("-dirty")]
+            git_rev = raw[:7]
     except (OSError, ValueError):
         pass
 
@@ -385,45 +381,6 @@ def get_system_info() -> SystemInfo:
         disks=_read_disks(),
         discord_heartbeat=_read_heartbeat(),
         version=_read_version(),
-    )
-
-
-class VacuumResult(BaseModel):
-    status: str
-    stdout: str
-    stderr: str
-    returncode: int
-
-
-@router.post("/vacuum-journal", response_model=VacuumResult, dependencies=[Depends(auth_dep)])
-async def vacuum_journal(request: Request) -> VacuumResult:
-    # `journalctl --rotate` seals the active journal file; `--vacuum-time=1s`
-    # then deletes every archived file older than one second — effectively
-    # everything we just rotated. This is system-wide (no per-unit knob in
-    # journalctl) so the operator-facing button is on the Machine page and
-    # never per-service. Operators use it to clear annoying stale warnings.
-    log.warning("journal vacuum requested by %s", _peer(request))
-    proc = await asyncio.create_subprocess_exec(
-        "sudo",
-        "-n",
-        "journalctl",
-        "--rotate",
-        "--vacuum-time=1s",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=20.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        return VacuumResult(status="timeout", stdout="", stderr="timeout", returncode=-1)
-    rc = proc.returncode or 0
-    return VacuumResult(
-        status="ok" if rc == 0 else "error",
-        stdout=out.decode(errors="replace"),
-        stderr=err.decode(errors="replace"),
-        returncode=rc,
     )
 
 
