@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=800, initial-scale=1">
+<title>Engineering Mode — Kiosk Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #09090b; color: #fafafa; font-family: -apple-system, 'Noto Sans TC', sans-serif; }
+
+  .scene { margin: 20px auto; width: 800px; }
+  .scene-label { font-size: 13px; color: #52525b; margin-bottom: 8px; padding-left: 4px; border-left: 3px solid #3f3f46; }
+  .page { width: 800px; height: 480px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid #27272a; border-radius: 12px; }
+  .title-bar { font-size: 18px; font-weight: 600; color: #a1a1aa; padding: 4px 8px; }
+  .arrow { font-size: 32px; color: #3f3f46; text-align: center; padding: 8px; }
+
+  /* Tab bar */
+  .tabs { display: flex; gap: 6px; }
+  .tab { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid #3f3f46; background: transparent; color: #fafafa; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
+  .tab.active { background: #fafafa; color: #09090b; border-color: #fafafa; }
+  .tab-back { width: 36px; flex: 0 0 36px; border-radius: 6px; border: none; background: transparent; color: #71717a; cursor: pointer; font-size: 16px; }
+
+  /* Content area */
+  .content { flex: 1; min-height: 0; overflow-y: auto; border-radius: 12px; border: 1px solid #27272a; background: rgba(24,24,27,0.5); padding: 12px; }
+  .section-title { font-size: 12px; font-weight: 600; color: #71717a; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+  .refresh-btn { background: transparent; border: none; color: #71717a; cursor: pointer; font-size: 14px; }
+
+  /* KV cards */
+  .kv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .kv { background: rgba(9,9,11,0.4); border-radius: 6px; padding: 6px 10px; }
+  .kv-label { font-size: 9px; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; }
+  .kv-value { font-family: monospace; font-size: 13px; margin-top: 2px; }
+  .ok { color: #6ee7b7; }
+  .warn { color: #fbbf24; }
+  .fail { color: #f87171; }
+  .muted { color: #71717a; }
+
+  /* Tables */
+  table { width: 100%; font-size: 11px; border-collapse: collapse; }
+  th { text-align: left; color: #71717a; padding: 4px 8px 4px 0; border-bottom: 1px solid #27272a; font-weight: 400; }
+  td { padding: 6px 8px 6px 0; border-bottom: 1px solid rgba(39,39,42,0.3); font-family: monospace; }
+
+  /* Pre blocks */
+  .pre { background: rgba(9,9,11,0.6); border-radius: 6px; padding: 8px; font-family: 'SF Mono', monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; line-height: 1.5; max-height: 100px; overflow-y: auto; }
+
+  /* MQTT stream */
+  .mqtt-line { display: flex; gap: 8px; padding: 2px 0; }
+  .mqtt-topic { color: #38bdf8; white-space: nowrap; }
+  .mqtt-payload { color: rgba(250,250,250,0.8); }
+
+  /* Badges */
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; }
+  .badge-green { background: #065f46; color: #6ee7b7; }
+  .badge-secondary { background: #27272a; color: #d4d4d8; }
+  .badge-red { background: #7f1d1d; color: #fca5a5; }
+
+  /* Buttons */
+  .btn { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+  .btn-outline { background: transparent; border: 1px solid #3f3f46; color: #fafafa; }
+  .btn-destructive { background: #7f1d1d; color: #fca5a5; }
+  .btn-ghost { background: transparent; border: none; color: #71717a; cursor: pointer; }
+  .btn-ghost:hover { color: #ef4444; }
+</style>
+</head>
+<body>
+
+<!-- Scene 0: Machine page easter egg -->
+<div class="scene">
+  <div class="scene-label">機器操作頁面 — row1 col3 空白區域連按 20 下進入工程模式</div>
+  <div class="page">
+    <div class="title-bar">機器操作</div>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; gap: 16px; flex: 1;">
+      <div style="border-radius: 16px; border: 2px solid rgba(16,185,129,0.7); background: rgba(6,78,59,0.25); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+        <div style="font-size: 36px;">🩺</div>
+        <div style="font-size: 20px; font-weight: 700;">健康檢查</div>
+        <div style="font-size: 11px; font-family: monospace; color: #71717a;">alarm-doctor</div>
+      </div>
+      <div style="border-radius: 16px; border: 2px solid rgba(217,119,6,0.7); background: rgba(120,53,15,0.25); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+        <div style="font-size: 36px;">🧪</div>
+        <div style="font-size: 20px; font-weight: 700;">煙霧測試</div>
+        <div style="font-size: 11px; font-family: monospace; color: #71717a;">alarm-smoke</div>
+      </div>
+      <!-- Easter egg cell -->
+      <div style="border-radius: 16px; border: 1px solid rgba(39,39,42,0.3); background: transparent; display: flex; align-items: center; justify-content: center; position: relative;">
+        <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;">
+          <div style="font-size: 10px; color: #27272a; pointer-events: none;">← tap 20× here</div>
+        </div>
+      </div>
+      <div style="border-radius: 16px; border: 2px solid rgba(217,119,6,0.7); background: rgba(120,53,15,0.25); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+        <div style="font-size: 36px;">🔄</div>
+        <div style="font-size: 20px; font-weight: 700;">重新開機</div>
+      </div>
+      <div style="border-radius: 16px; border: 2px solid rgba(225,29,72,0.7); background: rgba(76,5,25,0.4); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
+        <div style="font-size: 36px;">⏻</div>
+        <div style="font-size: 20px; font-weight: 700;">關機</div>
+      </div>
+      <div style="border-radius: 16px; border: 2px solid #27272a; background: rgba(24,24,27,0.5); display: flex; align-items: center; justify-content: center; color: #a1a1aa; font-size: 16px;">
+        ← 回設定
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼ 連按 20 下後進入</div>
+
+<!-- Scene 1: Zigbee tab -->
+<div class="scene">
+  <div class="scene-label">工程模式 — Zigbee tab: bridge 狀態 + 每個裝置的 battery / LQI / last seen</div>
+  <div class="page">
+    <div class="title-bar">工程模式</div>
+    <div class="tabs">
+      <button class="tab-back">←</button>
+      <button class="tab active">📡 Zigbee</button>
+      <button class="tab">📊 通訊</button>
+      <button class="tab">🖥 系統</button>
+      <button class="tab">🚀 部署</button>
+    </div>
+    <div class="content">
+      <div class="section-title">Bridge <span class="refresh-btn">🔄</span></div>
+      <div class="kv-grid">
+        <div class="kv"><div class="kv-label">State</div><div class="kv-value ok">online</div></div>
+        <div class="kv"><div class="kv-label">Version</div><div class="kv-value">1.42.0</div></div>
+        <div class="kv"><div class="kv-label">Channel</div><div class="kv-value">15</div></div>
+        <div class="kv"><div class="kv-label">PAN ID</div><div class="kv-value">0x1a62</div></div>
+        <div class="kv"><div class="kv-label">Coordinator</div><div class="kv-value">zStack</div></div>
+        <div class="kv"><div class="kv-label">Permit Join</div><div class="kv-value ok">no</div></div>
+      </div>
+
+      <div class="section-title">Devices (3)</div>
+      <table>
+        <thead><tr><th>Name</th><th>Model</th><th>Battery</th><th>LQI</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          <tr><td>btn_room_201</td><td class="muted">SNZB-01</td><td class="ok">85%</td><td class="ok">180</td><td class="muted">2m ago</td></tr>
+          <tr><td>btn_room_202</td><td class="muted">SNZB-01</td><td class="warn">23%</td><td class="fail">45</td><td class="muted">5m ago</td></tr>
+          <tr><td>btn_nurse</td><td class="muted">SNZB-01</td><td class="ok">92%</td><td class="ok">210</td><td class="muted">1m ago</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Scene 2: Comms tab -->
+<div class="scene">
+  <div class="scene-label">工程模式 — 通訊 tab: MQTT 即時訊息流 + alarm-bridge 日誌與統計</div>
+  <div class="page">
+    <div class="title-bar">工程模式</div>
+    <div class="tabs">
+      <button class="tab-back">←</button>
+      <button class="tab">📡 Zigbee</button>
+      <button class="tab active">📊 通訊</button>
+      <button class="tab">🖥 系統</button>
+      <button class="tab">🚀 部署</button>
+    </div>
+    <div class="content">
+      <div class="section-title">MQTT Live <button class="btn btn-destructive" style="font-size:11px;">📡 停止</button></div>
+      <div class="pre" style="margin-bottom: 12px;">
+        <div class="mqtt-line"><span class="mqtt-topic">zigbee2mqtt/btn_room_201</span> <span class="mqtt-payload">{"battery":85,"linkquality":180,"action":""}</span></div>
+        <div class="mqtt-line"><span class="mqtt-topic">zigbee2mqtt/bridge/state</span> <span class="mqtt-payload">{"state":"online"}</span></div>
+        <div class="mqtt-line"><span class="mqtt-topic">zigbee2mqtt/btn_nurse</span> <span class="mqtt-payload">{"action":"single","battery":92}</span></div>
+        <div class="mqtt-line"><span class="mqtt-topic">zigbee2mqtt/bridge/logging</span> <span class="mqtt-payload">{"level":"info","message":"MQTT publish..."}</span></div>
+      </div>
+
+      <div class="section-title">alarm-bridge <span class="refresh-btn">🔄</span></div>
+      <div class="kv-grid">
+        <div class="kv"><div class="kv-label">Debounce (24h)</div><div class="kv-value">3</div></div>
+        <div class="kv"><div class="kv-label">Last TAS</div><div class="kv-value">05-24 10:15</div></div>
+        <div class="kv"><div class="kv-label">Last Discord</div><div class="kv-value">05-24 10:15</div></div>
+      </div>
+
+      <div class="section-title">Journal (last 50)</div>
+      <div class="pre">2026-05-24T10:15:03+0800 TAS callout placed: 0953310258
+2026-05-24T10:15:02+0800 Discord notification sent (user)
+2026-05-24T10:14:58+0800 Debounce filtered btn_room_201 (2nd press within 30s)
+2026-05-24T10:14:55+0800 MQTT message: btn_room_201 action=single
+2026-05-24T10:14:25+0800 MQTT message: btn_room_201 action=single</div>
+    </div>
+  </div>
+</div>
+
+<!-- Scene 3: System tab -->
+<div class="scene">
+  <div class="scene-label">工程模式 — 系統 tab: routing / DNS / containers / SD health / throttle</div>
+  <div class="page">
+    <div class="title-bar">工程模式</div>
+    <div class="tabs">
+      <button class="tab-back">←</button>
+      <button class="tab">📡 Zigbee</button>
+      <button class="tab">📊 通訊</button>
+      <button class="tab active">🖥 系統</button>
+      <button class="tab">🚀 部署</button>
+    </div>
+    <div class="content">
+      <div class="section-title">System Diagnostics <span class="refresh-btn">🔄</span></div>
+
+      <div style="font-size: 11px; font-weight: 600; color: #71717a; margin-bottom: 4px;">Routing Table</div>
+      <div class="pre" style="margin-bottom: 10px;">default via 192.168.50.1 dev wlan0 proto dhcp metric 600
+192.168.50.0/24 dev wlan0 proto kernel scope link src 192.168.50.173</div>
+
+      <div style="font-size: 11px; font-weight: 600; color: #71717a; margin-bottom: 4px;">DNS Servers</div>
+      <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+        <span class="badge badge-secondary" style="font-family: monospace;">192.168.50.1</span>
+        <span class="badge badge-secondary" style="font-family: monospace;">8.8.8.8</span>
+      </div>
+
+      <div style="font-size: 11px; font-weight: 600; color: #71717a; margin-bottom: 4px;">Containers</div>
+      <table style="margin-bottom: 10px;">
+        <thead><tr><th>Name</th><th>CPU</th><th>Memory</th><th>PIDs</th></tr></thead>
+        <tbody>
+          <tr><td>mosquitto</td><td>0.12%</td><td>8.5MB / 1.9GB</td><td>3</td></tr>
+          <tr><td>zigbee2mqtt</td><td>1.34%</td><td>95MB / 1.9GB</td><td>12</td></tr>
+        </tbody>
+      </table>
+
+      <div style="font-size: 11px; font-weight: 600; color: #71717a; margin-bottom: 4px;">💾 SD Card Health (24h)</div>
+      <div class="ok" style="font-size: 11px; margin-bottom: 10px;">No I/O errors</div>
+
+      <div style="font-size: 11px; font-weight: 600; color: #71717a; margin-bottom: 4px;">⚠ Throttle Events (24h)</div>
+      <div class="ok" style="font-size: 11px;">No throttle events</div>
+    </div>
+  </div>
+</div>
+
+<!-- Scene 4: Deploy tab -->
+<div class="scene">
+  <div class="scene-label">工程模式 — 部署 tab: deploy 偵測 + generation 列表 + 清理舊版</div>
+  <div class="page">
+    <div class="title-bar">工程模式</div>
+    <div class="tabs">
+      <button class="tab-back">←</button>
+      <button class="tab">📡 Zigbee</button>
+      <button class="tab">📊 通訊</button>
+      <button class="tab">🖥 系統</button>
+      <button class="tab active">🚀 部署</button>
+    </div>
+    <div class="content">
+      <div class="section-title">Deploy Status <span class="refresh-btn">🔄</span></div>
+      <div class="kv-grid" style="grid-template-columns: repeat(2, 1fr);">
+        <div class="kv"><div class="kv-label">Status</div><div class="kv-value ok">idle</div></div>
+        <div class="kv"><div class="kv-label">Generation</div><div class="kv-value">42</div></div>
+        <div class="kv" style="grid-column: span 2;"><div class="kv-label">Last Deploy</div><div class="kv-value">2026/5/24 下午2:39:48</div></div>
+      </div>
+
+      <div class="section-title">
+        Generations (5)
+        <button class="btn btn-outline" style="font-size: 11px;">🗑 清理舊版</button>
+      </div>
+      <table>
+        <thead><tr><th>#</th><th>Date</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr style="background: rgba(6,78,59,0.2);"><td>42</td><td>2026-05-24 14:39</td><td><span class="badge badge-green">current</span></td></tr>
+          <tr><td>41</td><td>2026-05-21 22:10</td><td></td></tr>
+          <tr><td>40</td><td>2026-05-20 16:30</td><td></td></tr>
+          <tr><td>39</td><td>2026-05-18 09:15</td><td></td></tr>
+          <tr><td>38</td><td>2026-05-15 11:22</td><td></td></tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top: 16px; padding: 12px; border: 1px dashed #3f3f46; border-radius: 8px;">
+        <div style="font-size: 11px; color: #71717a; margin-bottom: 8px;">deploying 中時的顯示：</div>
+        <div class="kv-grid" style="grid-template-columns: repeat(2, 1fr);">
+          <div class="kv"><div class="kv-label">Status</div><div class="kv-value warn">DEPLOYING</div></div>
+          <div class="kv"><div class="kv-label">Generation</div><div class="kv-value">42</div></div>
+        </div>
+        <div class="pre" style="color: #fbbf24; font-size: 10px;">12345 activate-rs /nix/store/abc123-nixos-system-alarm-alpaca-...</div>
+        <div style="font-size: 10px; color: #71717a; margin-top: 4px;">auto-refresh every 3s while deploying</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="height: 40px;"></div>
+</body>
+</html>

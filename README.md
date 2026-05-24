@@ -57,13 +57,13 @@ app/
   networking.nix            NetworkManager + avahi (no declarative WiFi)
   zigbee.nix                podman: mosquitto + zigbee2mqtt (TZ=Asia/Taipei)
   alarm-bridge.nix          systemd unit running app/scripts/main.py
-  alarm-doctor.nix          Per-button maintenance jobs (battery / pair / replay)
+  alarm-doctor.nix          Per-button maintenance + layered network diagnostics
   kiosk-ui.nix              FastAPI uvicorn unit + buildNpmPackage of the frontend
-  kiosk-display.nix         services.cage + chromium pointed at loopback FastAPI
+  kiosk-display.nix         services.cage + chromium (Restart=always, partOf rotate)
   kiosk-ui/
     backend/                FastAPI app; main.py mounts built frontend + routes/
       routes/               dashboard, services, logs, wifi, zigbee, kiosk,
-                            system, network, alarm
+                            system, network, alarm, eng
       auth.py               HTTP Basic; loopback is auth-exempt
     frontend/               Vite + React + TypeScript SPA
   scripts/                  alarm-bridge daemon
@@ -89,7 +89,7 @@ nix eval --raw .#nixosConfigurations.alarm-alpaca.config.system.build.toplevel.d
                                        # cheap eval-only sanity check (no build)
 nix build .#nixosConfigurations.alarm-alpaca.config.system.build.toplevel
                                        # build the deploy target locally (aarch64)
-nix run github:serokell/deploy-rs -- .#alarm-alpaca
+nix run github:serokell/deploy-rs -- .#alarm-alpaca --skip-checks
                                        # deploy to the running RPi
 ```
 
@@ -211,14 +211,34 @@ git config core.hooksPath scripts/git-hooks
 
 ## Deploy gotchas
 
-- **cage doesn't auto-restart on deploy.** NixOS upstream sets
-  `X-RestartIfChanged=false` on `cage-tty1.service`, so changes to
-  `kioskUrl` or chromium flags in `app/kiosk-display.nix` produce a new
-  unit definition but the running cage keeps the old args. After deploy:
+- **Use `--skip-checks`** — deploy-rs checks evaluate the full closure,
+  which is slow on the Pi and routinely times out without the flag.
+
+- **cage doesn't auto-restart on deploy.** `RestartIfChanged=false`
+  means changes to `kioskUrl` or chromium flags produce a new unit
+  definition but the running cage keeps the old args. After deploy:
 
   ```bash
   sudo systemctl restart cage-tty1.service
   ```
+
+  Cage _does_ auto-restart on crashes (`Restart=always`), and
+  `cage-rotate-dsi` + `cage-touch-recalibrate` re-fire automatically
+  via `partOf`/`wantedBy`.
+
+- **Chromium cache can serve stale bundles.** If the kiosk UI doesn't
+  reflect frontend changes after cage restart, clear the cache:
+
+  ```bash
+  sudo systemctl stop cage-tty1.service
+  rm -rf /home/nixos/.config/chromium/Default/{Cache,Code\ Cache,Service\ Worker}
+  sudo systemctl start cage-tty1.service
+  ```
+
+- **Sudoers must use `/run/current-system/sw/bin/` paths**, not
+  `${pkgs.*}/bin/...`. With `remoteBuild = true`, Nix eval runs on
+  x86_64 but the Pi runs aarch64 — different store hashes make
+  `${pkgs.*}` sudoers entries silently fail.
 
 - **Bump `nixpkgs` and `nixos-raspberrypi` together.** The cachix mirror
   only stores natively-built aarch64 paths, so any input change
