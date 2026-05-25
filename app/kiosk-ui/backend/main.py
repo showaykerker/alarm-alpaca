@@ -18,6 +18,8 @@ API:
   GET  /api/kiosk/events              — curated Chinese activity stream
   GET  /api/kiosk/brightness          — current backlight value/percent
   PUT  /api/kiosk/brightness          — set backlight (clamped to ≥5%)
+  GET  /api/kiosk/sleep-config        — sleep mode timeout config
+  PUT  /api/kiosk/sleep-config        — update sleep mode timeout (0=disabled)
   POST /api/system/poweroff           — shut the device down (202, runs detached)
   POST /api/system/reboot             — reboot the device (202, runs detached)
   GET  /api/network/info              — per-interface IPv4 + mDNS self-probe (cached 30s)

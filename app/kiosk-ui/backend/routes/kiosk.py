@@ -122,6 +122,52 @@ def put_brightness(payload: BrightnessUpdate) -> BrightnessStatus:
 
 
 # ---------------------------------------------------------------------------
+# Sleep mode config
+# ---------------------------------------------------------------------------
+_DISPLAY_SETTINGS_FILE = Path("/var/lib/kiosk-ui/display-settings.json")
+
+
+class SleepConfig(BaseModel):
+    timeout_minutes: int = Field(default=2, ge=0, le=30)
+    sleep_brightness_pct: int = Field(default=5, ge=1, le=15)
+
+
+def _read_sleep_config() -> SleepConfig:
+    try:
+        data = json.loads(_DISPLAY_SETTINGS_FILE.read_text())
+        return SleepConfig(**data.get("sleep", {}))
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return SleepConfig()
+
+
+def _write_sleep_config(cfg: SleepConfig) -> None:
+    try:
+        data = json.loads(_DISPLAY_SETTINGS_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    data["sleep"] = cfg.model_dump()
+    body = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = _DISPLAY_SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(body)
+    tmp.replace(_DISPLAY_SETTINGS_FILE)
+
+
+@router.get(
+    "/sleep-config", response_model=SleepConfig, dependencies=[Depends(auth_dep)]
+)
+def get_sleep_config() -> SleepConfig:
+    return _read_sleep_config()
+
+
+@router.put(
+    "/sleep-config", response_model=SleepConfig, dependencies=[Depends(auth_dep)]
+)
+def put_sleep_config(payload: SleepConfig) -> SleepConfig:
+    _write_sleep_config(payload)
+    return _read_sleep_config()
+
+
+# ---------------------------------------------------------------------------
 # Aggregated status: just the few things the operator cares about.
 # ---------------------------------------------------------------------------
 class ComponentStatus(BaseModel):
