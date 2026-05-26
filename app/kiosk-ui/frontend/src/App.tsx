@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 
 import { EdgeGlow } from "@/components/EdgeGlow";
 import { PullToRefresh } from "@/components/PullToRefresh";
+import { SleepOverlay } from "@/components/SleepOverlay";
 import { KioskEventsProvider } from "@/lib/useKioskEvents";
 import DisplayConfig from "@/pages/config/Display";
 import InternetConfig from "@/pages/config/Internet";
@@ -23,6 +24,7 @@ export default function App() {
   return (
     <KioskEventsProvider>
       <div className="h-screen w-screen overflow-hidden bg-background text-foreground">
+        <SleepOverlay />
         <EdgeGlow />
         <PullToRefresh />
         {/* Sonner toasts. position=top-center keeps action confirmations

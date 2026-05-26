@@ -1,24 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Minus, Plus, Sun } from "lucide-react";
+import { Loader2, Minus, Moon, MoonStar, Plus, Sun } from "lucide-react";
 
 import { KioskShell } from "@/components/KioskShell";
-import { BackCard, EmptyCell, GridCell } from "@/components/PageGrid";
+import { BackCard, EmptyCell } from "@/components/PageGrid";
 import { cn } from "@/lib/utils";
 
 type Brightness = { present: boolean; value: number; max: number; percent: number };
+type SleepConfig = { timeout_minutes: number; sleep_brightness_pct: number };
 
-// Display config: brightness is the only setting today, surfaced as three
-// side-by-side tiles per the rework spec — `−` button, value readout,
-// `+` button.
-//
-// Why we step by raw `value` not by percent: the DSI panel's backlight
-// exposes only 32 discrete levels (max_brightness=31). At that resolution,
-// requesting "20%" quantises to the same hardware value as "19%" and the
-// re-read percent comes back unchanged, so percent-based +/- buttons get
-// stuck at the same number. Stepping `value` (with a step of ~mx/10) gives
-// each click visible progress, and we round the displayed percent to the
-// nearest 10 so the number reads cleanly (10, 20, 30, …).
 export default function DisplayConfig() {
+  // --- Brightness ---
   const [brightness, setBrightness] = useState<Brightness | null>(null);
   const writeTimer = useRef<number | null>(null);
   const pendingValue = useRef<number | null>(null);
@@ -27,16 +18,15 @@ export default function DisplayConfig() {
     try {
       const r = await fetch("/api/kiosk/brightness");
       if (r.ok) setBrightness(await r.json());
-    } catch { /* keep last-good */ }
+    } catch {
+      /* keep last-good */
+    }
   }, []);
 
-  useEffect(() => { void fetchBrightness(); }, [fetchBrightness]);
+  useEffect(() => {
+    void fetchBrightness();
+  }, [fetchBrightness]);
 
-  // Debounced write keyed on the raw sysfs value. We optimistically update
-  // the local state so the percent readout flips immediately; the backend
-  // round-trip then returns the canonical state. A pending-write ref lets
-  // rapid clicks chain off the LATEST target rather than the (possibly
-  // stale) rendered state — important because React batches renders.
   const writeBrightnessValue = (value: number) => {
     const max = brightness?.max ?? 1;
     pendingValue.current = value;
@@ -53,66 +43,127 @@ export default function DisplayConfig() {
           body: JSON.stringify({ value: target }),
         });
         if (r.ok) setBrightness(await r.json());
-      } catch { /* tile stays at the user-chosen value */ }
+      } catch {
+        /* tile stays at the user-chosen value */
+      }
     }, 120);
   };
 
-  const adjust = (direction: 1 | -1) => {
+  const adjustBrightness = (direction: 1 | -1) => {
     if (!brightness?.present) return;
-    // Step size = ~10% of the hardware range, rounded but clamped to a
-    // minimum of 1 so very coarse panels (mx<10) still move.
     const step = Math.max(1, Math.round(brightness.max / 10));
     const start = pendingValue.current ?? brightness.value;
     const target = start + direction * step;
-    const minValue = Math.max(1, Math.round(brightness.max / 20)); // mirror backend 5% floor
-    writeBrightnessValue(Math.max(minValue, Math.min(brightness.max, target)));
+    const minVal = Math.max(1, Math.round(brightness.max / 20));
+    writeBrightnessValue(Math.max(minVal, Math.min(brightness.max, target)));
   };
 
   const present = brightness?.present ?? false;
-  // Displayed percent rounds to the nearest 10 so the panel quantisation
-  // doesn't surface as "23%, 26%, 29%" — operator wants clean tens.
   const displayedPct = brightness ? Math.round(brightness.percent / 10) * 10 : 0;
   const minValue = brightness ? Math.max(1, Math.round(brightness.max / 20)) : 1;
   const atMin = present && brightness != null && brightness.value <= minValue;
   const atMax = present && brightness != null && brightness.value >= brightness.max;
 
+  // --- Sleep timeout ---
+  const [sleepConfig, setSleepConfig] = useState<SleepConfig | null>(null);
+  const sleepWriteTimer = useRef<number | null>(null);
+  const pendingSleep = useRef<number | null>(null);
+
+  const fetchSleepConfig = useCallback(async () => {
+    try {
+      const r = await fetch("/api/kiosk/sleep-config");
+      if (r.ok) setSleepConfig(await r.json());
+    } catch {
+      /* keep last-good */
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchSleepConfig();
+  }, [fetchSleepConfig]);
+
+  const writeSleepConfig = (patch: Partial<SleepConfig>) => {
+    setSleepConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+    if (sleepWriteTimer.current) window.clearTimeout(sleepWriteTimer.current);
+    sleepWriteTimer.current = window.setTimeout(async () => {
+      const cur = sleepConfig;
+      if (!cur) return;
+      const merged = { ...cur, ...patch };
+      try {
+        const r = await fetch("/api/kiosk/sleep-config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(merged),
+        });
+        if (r.ok) setSleepConfig(await r.json());
+      } catch {
+        /* tile stays at the user-chosen value */
+      }
+    }, 300);
+  };
+
+  const adjustSleepTimeout = (direction: 1 | -1) => {
+    if (!sleepConfig) return;
+    const start = pendingSleep.current ?? sleepConfig.timeout_minutes;
+    const next = Math.max(0, Math.min(30, start + direction));
+    pendingSleep.current = next;
+    writeSleepConfig({ timeout_minutes: next });
+  };
+
+  const adjustSleepBrightness = (direction: 1 | -1) => {
+    if (!sleepConfig) return;
+    const next = Math.max(1, Math.min(15, sleepConfig.sleep_brightness_pct + direction));
+    writeSleepConfig({ sleep_brightness_pct: next });
+  };
+
+  const sleepMinutes = sleepConfig?.timeout_minutes ?? 2;
+  const sleepAtMin = sleepConfig != null && sleepMinutes <= 0;
+  const sleepAtMax = sleepConfig != null && sleepMinutes >= 30;
+  const sleepBrt = sleepConfig?.sleep_brightness_pct ?? 5;
+  const sleepBrtAtMin = sleepConfig != null && sleepBrt <= 1;
+  const sleepBrtAtMax = sleepConfig != null && sleepBrt >= 15;
+
   return (
     <KioskShell title="顯示設定">
       <div className="grid grid-cols-3 grid-rows-2 gap-4 flex-1 min-h-0">
-        <StepperButton
-          icon={<Minus className="h-20 w-20" strokeWidth={3} />}
-          ariaLabel="降低亮度"
-          disabled={!present || atMin}
-          onClick={() => adjust(-1)}
+        {/* Row 1 — backlight · sleep brightness · sleep timeout */}
+        <SplitTile
+          icon={<Sun className="h-10 w-10 text-amber-300" />}
+          loading={!brightness}
+          error={brightness != null && !present ? "找不到背光裝置" : undefined}
+          value={`${displayedPct}%`}
+          label="螢幕亮度"
+          valueColor="text-amber-200"
+          onDecrease={() => adjustBrightness(-1)}
+          onIncrease={() => adjustBrightness(1)}
+          decreaseDisabled={!present || atMin}
+          increaseDisabled={!present || atMax}
+        />
+        <SplitTile
+          icon={<MoonStar className="h-10 w-10 text-indigo-300" />}
+          loading={!sleepConfig}
+          value={`${sleepBrt}%`}
+          label="休眠亮度"
+          valueColor="text-indigo-200"
+          onDecrease={() => adjustSleepBrightness(-1)}
+          onIncrease={() => adjustSleepBrightness(1)}
+          decreaseDisabled={!sleepConfig || sleepBrtAtMin}
+          increaseDisabled={!sleepConfig || sleepBrtAtMax}
+        />
+        <SplitTile
+          icon={<Moon className="h-10 w-10 text-blue-300" />}
+          loading={!sleepConfig}
+          value={sleepMinutes === 0 ? "關" : `${sleepMinutes}`}
+          unit={sleepMinutes > 0 ? "分鐘" : undefined}
+          label="自動休眠"
+          valueColor={sleepMinutes === 0 ? "text-muted-foreground" : "text-blue-200"}
+          onDecrease={() => adjustSleepTimeout(-1)}
+          onIncrease={() => adjustSleepTimeout(1)}
+          decreaseDisabled={!sleepConfig || sleepAtMin}
+          increaseDisabled={!sleepConfig || sleepAtMax}
         />
 
-        <GridCell>
-          <div className="flex flex-col items-center justify-center h-full gap-3">
-            <Sun className="h-12 w-12 text-amber-300" />
-            {!brightness ? (
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            ) : !present ? (
-              <p className="text-base text-muted-foreground text-center px-2">
-                找不到背光裝置
-              </p>
-            ) : (
-              <>
-                <div className="text-7xl font-bold tabular-nums text-amber-200">
-                  {displayedPct}%
-                </div>
-                <div className="text-sm text-muted-foreground">螢幕亮度</div>
-              </>
-            )}
-          </div>
-        </GridCell>
-
-        <StepperButton
-          icon={<Plus className="h-20 w-20" strokeWidth={3} />}
-          ariaLabel="提高亮度"
-          disabled={!present || atMax}
-          onClick={() => adjust(1)}
-        />
-
+        {/* Row 2 */}
         <EmptyCell />
         <EmptyCell />
         <BackCard to="/settings" label="回設定" />
@@ -121,31 +172,91 @@ export default function DisplayConfig() {
   );
 }
 
-function StepperButton({
+function SplitTile({
   icon,
-  ariaLabel,
-  disabled,
-  onClick,
+  loading,
+  error,
+  value,
+  unit,
+  label,
+  valueColor,
+  onDecrease,
+  onIncrease,
+  decreaseDisabled,
+  increaseDisabled,
 }: {
   icon: React.ReactNode;
-  ariaLabel: string;
-  disabled: boolean;
-  onClick: () => void;
+  loading: boolean;
+  error?: string;
+  value: string;
+  unit?: string;
+  label: string;
+  valueColor: string;
+  onDecrease: () => void;
+  onIncrease: () => void;
+  decreaseDisabled: boolean;
+  increaseDisabled: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={ariaLabel}
-      className={cn(
-        "rounded-2xl border-2 flex items-center justify-center",
-        "bg-secondary border-border/80 transition-colors",
-        "hover:brightness-110 active:scale-[0.97]",
-        "disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100",
-      )}
-    >
-      {icon}
-    </button>
+    <div className="rounded-2xl border-2 bg-card border-border relative overflow-hidden">
+      {/* Split background hint — left slightly darker, right slightly lighter */}
+      <div className="absolute inset-y-0 left-0 w-1/2 bg-white/[0.02] pointer-events-none" />
+      <div className="absolute inset-y-0 right-0 w-1/2 bg-white/[0.05] pointer-events-none" />
+
+      {/* Center divider */}
+      <div className="absolute left-1/2 top-[12%] bottom-[12%] w-px bg-border/40 pointer-events-none" />
+
+      {/* Faint ± hints at edges */}
+      <Minus
+        className={cn(
+          "absolute left-3 top-1/2 -translate-y-1/2 h-6 w-6 pointer-events-none",
+          decreaseDisabled
+            ? "text-muted-foreground/10"
+            : "text-muted-foreground/25",
+        )}
+      />
+      <Plus
+        className={cn(
+          "absolute right-3 top-1/2 -translate-y-1/2 h-6 w-6 pointer-events-none",
+          increaseDisabled
+            ? "text-muted-foreground/10"
+            : "text-muted-foreground/25",
+        )}
+      />
+
+      {/* Content */}
+      <div className="relative flex flex-col items-center justify-center h-full gap-2 pointer-events-none">
+        {icon}
+        {loading ? (
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        ) : error ? (
+          <p className="text-base text-muted-foreground text-center px-2">
+            {error}
+          </p>
+        ) : (
+          <div className={cn("text-5xl font-bold tabular-nums", valueColor)}>
+            {value}
+            {unit && <span className="text-xl ml-1">{unit}</span>}
+          </div>
+        )}
+        <div className="text-sm text-muted-foreground">{label}</div>
+      </div>
+
+      {/* Interactive halves — last in DOM so they sit on top */}
+      <button
+        type="button"
+        onClick={onDecrease}
+        disabled={loading || decreaseDisabled}
+        aria-label={`${label} 減少`}
+        className="absolute inset-y-0 left-0 w-1/2 active:bg-white/[0.06] disabled:active:bg-transparent"
+      />
+      <button
+        type="button"
+        onClick={onIncrease}
+        disabled={loading || increaseDisabled}
+        aria-label={`${label} 增加`}
+        className="absolute inset-y-0 right-0 w-1/2 active:bg-white/[0.06] disabled:active:bg-transparent"
+      />
+    </div>
   );
 }
