@@ -441,21 +441,37 @@ def clear_events() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Server-Sent Events stream
 # ---------------------------------------------------------------------------
-# One background publisher polls the journal every _PUBLISH_PERIOD_S and fans
-# out alarm/selftest deltas + heartbeats to every subscribed client queue.
-# Clients open a long-lived GET /events/stream; we yield server-sent-events
-# (text/event-stream) until the client disconnects. The previous design had
-# the frontend poll /status every 5s, which works but couples flash latency
-# to the poll interval and burns a request per client per tick.
+# Two background workers feed every subscribed /events/stream client:
+#
+#   1. _mqtt_subscriber — a paho client subscribed to zigbee2mqtt/+ on the
+#      mosquitto loopback. On a button press it broadcasts an "alarm" or
+#      "selftest" SSE event immediately, in parallel with alarm-bridge
+#      receiving the same MQTT message. End-to-end press → flash is
+#      sub-second; the previous design polled alarm-bridge's journal every
+#      5s for "TAS callout placed", coupling flash latency to the poll
+#      interval AND to the synchronous TAS HTTP roundtrip that runs before
+#      the log line is written.
+#
+#   2. _publisher_loop — heartbeats only. Periodic snapshot of CPU temp,
+#      load, mem, fan; drives the 即時狀態 card and the frontend's
+#      dead-connection watchdog. Renamed semantically from the old
+#      journal-polling publisher.
 
-_PUBLISH_PERIOD_S = 5.0
-# Heartbeat doubles as the live-metrics tick (cpu temp, load, mem). 5s
-# matches the alarm/selftest poll period so the publisher fires both on the
-# same iteration — keeps the 即時狀態 card moving without a per-page poll.
-# Frontend's dead-connection watchdog deadline (35s) tolerates several
-# missed heartbeats so a brief blip won't churn the reconnect path.
 _HEARTBEAT_PERIOD_S = 5.0
 _PER_CLIENT_QUEUE_MAX = 32
+
+# Local mirror of alarm-bridge's BUTTON_ACTION_BEHAVIOR (app/scripts/config.py).
+# Kept in sync by hand — both modules read MQTT independently; tying them
+# together would require importing the bridge package, which is intentionally
+# out of tree from the kiosk-ui build.
+_BUTTON_ACTION_BEHAVIOR: dict[str, str] = {
+    "single": "call",
+    "long": "selftest",
+}
+
+_MQTT_HOST = "127.0.0.1"
+_MQTT_PORT = 1883
+_MQTT_TOPIC = "zigbee2mqtt/+"
 
 # CPU temperature sensor on the Pi 5. Reads as millidegrees Celsius;
 # /sys/class/thermal/thermal_zone0 is the SoC zone.
@@ -573,59 +589,23 @@ def _broadcast(event: str, data: dict[str, Any]) -> None:
 
 
 async def _publisher_loop() -> None:
-    # Seed the "last seen" markers from the current journal so the very first
-    # poll cycle doesn't replay an old alarm to fresh subscribers. This is
-    # the fix for the "reboot-during-glow re-fires the flash" bug: without
-    # seeding, a reboot inside the 15s glow window would re-publish the
-    # original alarm event to the kiosk frontend on reconnect because the
-    # publisher's "what was the last alarm I knew about" state is None.
-    #
-    # If the seeding scan itself fails (journalctl wedged etc.) we keep
-    # `seen_*` at the sentinel and re-attempt seeding on each iteration —
-    # silently flipping to None and treating the next observed alarm as
-    # "fresh" would reintroduce the very bug we are defending against.
-    seen_alarm: int | None = None
-    seen_selftest: int | None = None
-    seeded = False
-
-    last_heartbeat = 0.0
+    # Heartbeats only. alarm/selftest now arrive via the MQTT subscriber
+    # (sub-second) — see _mqtt_subscriber below. CPU temp + load + mem +
+    # fan are carried on every heartbeat so the kiosk's 即時狀態 card and
+    # the EdgeGlow thermal overlay update without a per-page poll. The
+    # 5s period stays comfortably under the frontend watchdog (35s).
     while True:
         try:
-            cur_alarm, cur_selftest = await asyncio.gather(
-                _last_alarm_us(), _last_selftest_us()
+            metrics = _read_live_metrics()
+            _broadcast(
+                "heartbeat",
+                {"t": int(time.time()), **metrics.model_dump()},
             )
-            if not seeded:
-                seen_alarm, seen_selftest = cur_alarm, cur_selftest
-                seeded = True
-            else:
-                if cur_alarm is not None and cur_alarm != seen_alarm:
-                    seen_alarm = cur_alarm
-                    _broadcast("alarm", {"us": cur_alarm})
-                if cur_selftest is not None and cur_selftest != seen_selftest:
-                    seen_selftest = cur_selftest
-                    _broadcast("selftest", {"us": cur_selftest})
-            now = time.monotonic()
-            if now - last_heartbeat >= _HEARTBEAT_PERIOD_S:
-                # Heartbeat carries the live host metrics — CPU temp + load
-                # averages + memory — so the kiosk's 即時狀態 card and the
-                # EdgeGlow thermal overlay both update without a per-page
-                # poll. We keep the period at _HEARTBEAT_PERIOD_S because
-                # load/mem change slowly and reading them is cheap.
-                metrics = _read_live_metrics()
-                _broadcast(
-                    "heartbeat",
-                    {"t": int(time.time()), **metrics.model_dump()},
-                )
-                last_heartbeat = now
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Never let a transient journalctl hiccup kill the publisher.
-            # Note `seeded` stays False until a poll succeeds, so a failed
-            # first scan doesn't poison the next one into emitting a stale
-            # alarm.
-            _log.exception("kiosk SSE publisher iteration failed")
-        await asyncio.sleep(_PUBLISH_PERIOD_S)
+            _log.exception("kiosk SSE heartbeat iteration failed")
+        await asyncio.sleep(_HEARTBEAT_PERIOD_S)
 
 
 async def start_publisher() -> None:
@@ -645,6 +625,83 @@ async def stop_publisher() -> None:
     with contextlib.suppress(asyncio.CancelledError):
         await _publisher_task
     _publisher_task = None
+
+
+# ---------------------------------------------------------------------------
+# MQTT subscriber: fast-path button-press SSE
+# ---------------------------------------------------------------------------
+_mqtt_client: Any = None
+_mqtt_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _on_mqtt_message(_client: Any, _userdata: Any, msg: Any) -> None:
+    # Runs on paho's network thread, NOT the asyncio loop. We hop back to
+    # the loop via call_soon_threadsafe before touching _subscribers /
+    # asyncio.Queue — both are loop-affine and not thread-safe.
+    try:
+        payload = json.loads(msg.payload.decode("utf-8", errors="replace"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    action = payload.get("action")
+    if not isinstance(action, str):
+        return
+    behavior = _BUTTON_ACTION_BEHAVIOR.get(action)
+    if behavior not in ("call", "selftest"):
+        return
+
+    event = "alarm" if behavior == "call" else "selftest"
+    us = int(time.time() * 1_000_000)
+    loop = _mqtt_loop
+    if loop is None:
+        return
+    loop.call_soon_threadsafe(_broadcast, event, {"us": us})
+
+
+def _on_mqtt_connect(client: Any, _userdata: Any, _flags: Any, rc: int) -> None:
+    if rc == 0:
+        client.subscribe(_MQTT_TOPIC, qos=0)
+    else:
+        _log.warning("kiosk MQTT subscriber connect failed rc=%s", rc)
+
+
+async def start_mqtt_subscriber() -> None:
+    """Idempotent: called from FastAPI lifespan. Connects to the loopback
+    mosquitto and subscribes to button presses for fast-path SSE flash."""
+    global _mqtt_client, _mqtt_loop
+    if _mqtt_client is not None:
+        return
+    import paho.mqtt.client as mqtt  # type: ignore[import]
+
+    _mqtt_loop = asyncio.get_running_loop()
+    client = mqtt.Client(client_id="kiosk-ui-flash", clean_session=True)
+    client.on_connect = _on_mqtt_connect
+    client.on_message = _on_mqtt_message
+    # reconnect_delay_set: paho retries with backoff on broker drop; matches
+    # alarm-bridge's own resilience so a mosquitto restart doesn't strand
+    # the flash path.
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
+    try:
+        client.connect_async(_MQTT_HOST, _MQTT_PORT, keepalive=30)
+        client.loop_start()
+    except Exception:
+        _log.exception("kiosk MQTT subscriber start failed")
+        return
+    _mqtt_client = client
+
+
+async def stop_mqtt_subscriber() -> None:
+    global _mqtt_client, _mqtt_loop
+    if _mqtt_client is None:
+        return
+    try:
+        _mqtt_client.loop_stop()
+        _mqtt_client.disconnect()
+    except Exception:
+        _log.exception("kiosk MQTT subscriber stop failed")
+    _mqtt_client = None
+    _mqtt_loop = None
 
 
 async def _client_stream(snapshot_msg: str) -> AsyncIterator[str]:

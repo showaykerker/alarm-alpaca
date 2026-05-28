@@ -67,13 +67,17 @@ from routes.zigbee import router as zigbee_router
 from routes.kiosk import router as kiosk_router
 from routes.kiosk import start_publisher as start_kiosk_publisher
 from routes.kiosk import stop_publisher as stop_kiosk_publisher
+from routes.kiosk import start_mqtt_subscriber as start_kiosk_mqtt
+from routes.kiosk import stop_mqtt_subscriber as stop_kiosk_mqtt
 from routes.system import router as system_router
 from routes.network import router as network_router
 from routes.alarm import router as alarm_router
 from routes.eng import router as eng_router
 
 PHONES_FILE = Path(os.environ.get("KIOSK_PHONES_FILE", "/etc/alarm-bridge/phones.txt"))
-PRESETS_FILE = Path(os.environ.get("KIOSK_PRESETS_FILE", "/var/lib/kiosk-ui/phone-presets.json"))
+PRESETS_FILE = Path(
+    os.environ.get("KIOSK_PRESETS_FILE", "/var/lib/kiosk-ui/phone-presets.json")
+)
 # One frontend serves both the on-device Chromium kiosk and LAN admin
 # clients. Mounted at /.
 STATIC_DIR = Path(os.environ.get("KIOSK_STATIC_DIR", ""))
@@ -86,15 +90,19 @@ STATIC_DIR = Path(os.environ.get("KIOSK_STATIC_DIR", ""))
 _PHONE_RE = re.compile(r"^\+?\d{3,20}$")
 _PHONE_SEPARATORS_RE = re.compile(r"[\s\-]+")
 
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    # The kiosk SSE publisher fans alarm/selftest events out to every open
-    # /api/kiosk/events/stream subscriber. Started once at app boot so the
-    # first client connect doesn't pay the cold-scan cost.
+    # Heartbeat publisher (CPU/load/mem) + MQTT subscriber (alarm/selftest
+    # fast path). Both fan into the shared SSE broadcast on
+    # /api/kiosk/events/stream — the MQTT subscriber runs press-to-flash in
+    # under a second, replacing the previous 5s journal poll.
     await start_kiosk_publisher()
+    await start_kiosk_mqtt()
     try:
         yield
     finally:
+        await stop_kiosk_mqtt()
         await stop_kiosk_publisher()
 
 
@@ -188,6 +196,7 @@ def put_phones(payload: PhonesUpdate) -> PhonesResponse:
 # Phone presets — persist to /var/lib/kiosk-ui/phone-presets.json
 # ---------------------------------------------------------------------------
 
+
 class PhonePreset(BaseModel):
     name: str
     phones: list[str]
@@ -213,7 +222,8 @@ def _read_presets() -> list[PhonePreset]:
 def _write_presets(presets: list[PhonePreset]) -> None:
     body = json.dumps(
         {"presets": [p.model_dump() for p in presets]},
-        ensure_ascii=False, indent=2,
+        ensure_ascii=False,
+        indent=2,
     )
     tmp = PRESETS_FILE.with_suffix(".tmp")
     tmp.write_text(body)
@@ -238,7 +248,9 @@ def save_preset(payload: PresetCreate) -> PresetsResponse:
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="preset name required")
-    cleaned = [_PHONE_SEPARATORS_RE.sub("", s.strip()) for s in payload.phones if s.strip()]
+    cleaned = [
+        _PHONE_SEPARATORS_RE.sub("", s.strip()) for s in payload.phones if s.strip()
+    ]
     invalid = [s for s in cleaned if not _PHONE_RE.match(s)]
     if invalid:
         raise HTTPException(status_code=422, detail={"invalid": invalid})
