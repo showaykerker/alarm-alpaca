@@ -363,6 +363,9 @@
               ./app/kiosk-display.nix
               ./app/alarm-alpaca-host.nix
               ./app/alarm-alpaca-runtime.nix
+              # Not added to rpi5-installer — first-boot image doesn't need
+              # to nag about CVEs before the device is provisioned.
+              ./app/cve-monitor.nix
             ];
           };
         };
