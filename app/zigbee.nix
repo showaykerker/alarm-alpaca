@@ -57,7 +57,11 @@ in
   virtualisation.oci-containers.backend = "podman";
 
   virtualisation.oci-containers.containers.mosquitto = {
-    image = "docker.io/library/eclipse-mosquitto:2";
+    # Digest-pinned to defeat supply-chain repointing of the `:2` tag. To
+    # bump: `skopeo inspect --raw docker://docker.io/library/eclipse-mosquitto:2 \
+    # | sha256sum` (the index digest covers all arches; podman picks arm64/v8
+    # on the device).
+    image = "docker.io/library/eclipse-mosquitto:2@sha256:a908c65cc8e67ec9d292ef27c2c0360dbaaee7eb1b935cdd194e67697f15dea1";
     autoStart = true;
     # Bind to loopback only. Inter-container traffic (z2m → mosquitto) flows
     # over the podman alarm-net via container DNS, not this host port.
@@ -74,7 +78,8 @@ in
   };
 
   virtualisation.oci-containers.containers.zigbee2mqtt = {
-    image = "docker.io/koenkk/zigbee2mqtt:2.1.1";
+    # Digest-pinned (see mosquitto comment above for bump procedure).
+    image = "docker.io/koenkk/zigbee2mqtt:2.1.1@sha256:c7b111384716247f057b449ebb242bf05f3fafb98dd6d5688c1ac1fc730d5e95";
     autoStart = true;
     # Same rationale as mosquitto above — frontend is for occasional
     # admin use via SSH port-forward, not LAN exposure.
