@@ -128,13 +128,18 @@ export function SleepOverlay() {
     };
 
     const onActivity = () => startTimer();
-    const events = [
-      "touchstart",
-      "touchmove",
-      "mousedown",
-      "mousemove",
-      "keydown",
-    ];
+    // On-device kiosk (the only context where IS_KIOSK is true and this
+    // effect runs) has a touchscreen + occasional USB-keyboard repair
+    // session. The `cursor-park.service` in app/kiosk-display.nix calls
+    // `ydotool mousemove --absolute -- 9999 9999` every 3 seconds to keep
+    // the wayland cursor hidden in the corner — that synthesised event
+    // surfaces in chromium as a `mousemove` on `document`, which would
+    // reset this idle timer every 3s and prevent sleep mode from ever
+    // triggering. `mousedown` would have the same problem if cursor-park
+    // ever clicked; keep `keydown` for the keyboard-repair case.
+    // touchstart/touchmove are sourced from the Goodix panel via wayland
+    // and aren't synthesised by anything on the system.
+    const events = ["touchstart", "touchmove", "keydown"];
     events.forEach((e) =>
       document.addEventListener(e, onActivity, { passive: true }),
     );

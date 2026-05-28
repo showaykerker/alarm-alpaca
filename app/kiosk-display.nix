@@ -342,45 +342,17 @@ in
     invisibleCursorTheme
   ];
 
-  # Belt-and-suspenders cursor hiding: warp the compositor cursor into the
-  # bottom-right corner on a 3-second loop. The transparent XCURSOR theme
-  # alone does not always win — wlroots/cage may load a fallback theme out
-  # of an unrelated XDG path and chromium 147+ sometimes ignores CSS
-  # `cursor: none`. Parking the pointer past the visible viewport keeps
-  # the cursor effectively invisible regardless of what theme actually
-  # rendered. We use ydotool because it synthesises events through the
-  # kernel `uinput` device — no Wayland protocol support required from
-  # cage, and the warp survives chromium's per-surface cursor logic.
-  programs.ydotool.enable = true;
-
-  systemd.services.cursor-park = {
-    description = "Park the kiosk cursor in the bottom-right corner on a loop";
-    after = [
-      "cage-tty1.service"
-      "ydotoold.service"
-    ];
-    bindsTo = [ "cage-tty1.service" ];
-    wantedBy = [ "cage-tty1.service" ];
-    serviceConfig = {
-      Type = "simple";
-      Restart = "always";
-      RestartSec = "5s";
-      # ydotoold listens on /run/ydotoold/socket (per the NixOS module);
-      # the client looks in /tmp/.ydotool_socket by default, so point it
-      # at the real path. Running as root means the 0660-group=ydotool
-      # socket permission still passes via CAP_DAC_OVERRIDE.
-      Environment = [ "YDOTOOL_SOCKET=/run/ydotoold/socket" ];
-      ExecStart = pkgs.writeShellScript "cursor-park-loop" ''
-        # Sleep first so cage has time to expose the seat / virtual pointer
-        # the first uinput device attaches to. Subsequent iterations re-park
-        # every 3s — cursor stays where the user last tapped for up to 3s
-        # then snaps to the corner.
-        sleep 5
-        while true; do
-          ${pkgs.ydotool}/bin/ydotool mousemove --absolute -- 9999 9999 || true
-          sleep 3
-        done
-      '';
-    };
-  };
+  # Cursor hiding: `invisibleCursorTheme` above is the sole mechanism — a
+  # 1×1 transparent XCURSOR theme aliased to every common cursor name so
+  # whatever fallback wlroots/cage looks up renders as transparent pixels.
+  # We previously also ran a `cursor-park` systemd unit that ydotool-warped
+  # the cursor off-screen as belt-and-suspenders (the original comment
+  # claimed the theme alone "doesn't always win"). On the current pinned
+  # nixpkgs (0c88e1f, cage + wlroots + chromium 147) the theme handles the
+  # entire job: this kiosk has only a Goodix touch device — no pointer —
+  # and wlroots simply doesn't draw a cursor surface for pure-touch input.
+  # The cursor was never observed on touch with the unit stopped, so the
+  # whole apparatus (service + python+evdev script + programs.ydotool +
+  # ydotoold socket) was removed. If a cursor ever does appear, revert this
+  # commit to bring the event-driven cursor-park back.
 }
