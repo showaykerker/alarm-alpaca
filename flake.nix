@@ -205,12 +205,54 @@
                 enable = true;
                 settings = {
                   PasswordAuthentication = false;
+                  # Explicit defence-in-depth: NixOS default is `false`, but
+                  # sshd still advertises `keyboard-interactive` in its
+                  # method list unless we set it here. Setting both makes
+                  # the auth surface unambiguously pubkey-only.
+                  KbdInteractiveAuthentication = false;
                   # mkForce: the upstream image-installer module sets this
                   # to "yes" so the recovery shell is reachable. Lock it
                   # down to key-only on the nixos user — root never logs in.
                   PermitRootLogin = lib.mkForce "no";
                 };
               };
+
+              # Block console foothold via USB keyboard. The kiosk-display
+              # module already disables `getty@tty1.service` so cage owns the
+              # seat, but NixOS' default `autovt@.service` template would
+              # still spawn a getty on tty2..tty6 the moment someone hits
+              # Ctrl+Alt+F2 with a USB keyboard attached.
+              #
+              # Two layers:
+              #   1. NAutoVTs=0 + ReserveVT=0 tell systemd-logind not to
+              #      reserve or spin up any autovt slot. This is the
+              #      authoritative kill — without an autovt the VT switch
+              #      lands on a black tty with no agetty.
+              #   2. Belt-and-suspenders: also disable the static
+              #      getty@tty{2..6} unit instances in case something
+              #      (recovery image, future module addition) re-enables
+              #      autovt globally. Disabling a not-yet-instantiated
+              #      template instance is a no-op, which is fine.
+              services.logind.settings.Login = {
+                NAutoVTs = 0;
+                ReserveVT = 0;
+              };
+              systemd.services."getty@tty2".enable = false;
+              systemd.services."getty@tty3".enable = false;
+              systemd.services."getty@tty4".enable = false;
+              systemd.services."getty@tty5".enable = false;
+              systemd.services."getty@tty6".enable = false;
+
+              # Force the `nixos` account to a locked password. The user is
+              # ssh-key-only by design (PasswordAuthentication=false above),
+              # but `users.users.nixos` declares no `hashedPassword`/
+              # `initialPassword`, so on a mutableUsers=true system someone
+              # could `sudo passwd nixos` (or the upstream image's first-
+              # boot prompt could set one) and inadvertently open a console
+              # login path on top of the VT lockdown above. `!` is the
+              # canonical "no valid password" sentinel — passwd refuses to
+              # match it for either local login or `su`.
+              users.users.nixos.hashedPassword = "!";
 
               # nixos user has no password; wheel must not require one for sudo to work
               security.sudo.wheelNeedsPassword = false;
