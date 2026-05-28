@@ -9,6 +9,7 @@ own `ringingTimeout`.
 import os
 import threading
 import time
+from collections import deque
 
 import httpx
 
@@ -56,14 +57,55 @@ class TasClient:
     def __init__(self):
         self._lock = threading.Lock()
         self._last_call_ts = 0.0
+        # Timestamps (monotonic) of every callout attempt accepted by the
+        # rate limiter, oldest first. Trimmed to the configured window on
+        # each call. State is process-local — restart resets the counter,
+        # which is the intended fail-safe: an alarm-bridge crash loop that
+        # spams TAS would also spam restarts and reset the bucket, so the
+        # systemd Restart=always behaviour does NOT defeat the throttle in
+        # practice (RestartSec=5 caps the spam rate; over an hour you'd
+        # still need 12+ successful boots to exceed the limit).
+        self._recent_calls: deque[float] = deque()
 
     def trigger_call(self) -> bool:
+        rate_limited = False
         with self._lock:
             now = time.monotonic()
             if now - self._last_call_ts < config.TAS_COOLDOWN_SECONDS:
                 log.warning("TAS cooldown active, skipping callout")
                 return False
-            self._last_call_ts = now
+            cutoff = now - config.TAS_HOURLY_WINDOW_SECONDS
+            while self._recent_calls and self._recent_calls[0] < cutoff:
+                self._recent_calls.popleft()
+            if len(self._recent_calls) >= config.TAS_HOURLY_LIMIT:
+                rate_limited = True
+            else:
+                self._recent_calls.append(now)
+                self._last_call_ts = now
+
+        if rate_limited:
+            # Alert outside the lock so the (synchronous) httpx call to
+            # Discord doesn't extend the critical section. Imported lazily
+            # to keep discord_notifier optional in unit tests / smokes that
+            # don't set webhook URLs.
+            log.critical(
+                "TAS hourly rate limit reached "
+                f"({config.TAS_HOURLY_LIMIT} callouts / "
+                f"{config.TAS_HOURLY_WINDOW_SECONDS}s); dropping callout"
+            )
+            try:
+                from discord_notifier import Channel, post_message
+
+                post_message(
+                    f"⚠️ **TAS rate limit hit** — dropped a callout. "
+                    f"Cap: {config.TAS_HOURLY_LIMIT}/hour. "
+                    f"Investigate: rogue MQTT publisher, paired-device storm, "
+                    f"or alarm-bridge loop.",
+                    channel=Channel.SYSTEM,
+                )
+            except Exception as e:
+                log.warning(f"Discord rate-limit alert failed: {e}")
+            return False
 
         api_key = os.environ.get("TAS_API_KEY")
         if not api_key:

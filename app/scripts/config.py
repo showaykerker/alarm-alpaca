@@ -45,6 +45,14 @@ TAS_IVR_REPEAT = 1
 TAS_RINGING_TIMEOUT = 15  # seconds
 TAS_COOLDOWN_SECONDS = 10  # min interval between callouts (debounce double-press)
 TAS_HTTP_TIMEOUT = 15
+# Sliding-window safety cap on top of the per-press cooldown. Protects
+# against runaway triggers — rogue paired zigbee device spamming `action`,
+# an alarm-bridge bug looping, or anyone who eventually gets MQTT publish
+# rights to `zigbee2mqtt/<btn>/action`. Counted at the same point as the
+# cooldown (per HTTP attempt, not per success), so a TAS-side failure
+# still consumes a slot.
+TAS_HOURLY_LIMIT = 12
+TAS_HOURLY_WINDOW_SECONDS = 3600
 
 ############ Discord Webhook ############
 DISCORD_HEARTBEAT_TITLE = "🟢 Emergency Button Monitor"
